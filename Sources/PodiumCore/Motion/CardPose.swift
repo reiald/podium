@@ -22,6 +22,19 @@ public struct CardPose: Equatable, Sendable {
         [Double(center.x), Double(center.y), Double(scale), Double(tilt), Double(alpha)]
     }
 
+    /// Whether a card's spring is visually at rest. Position is in points (displacement under
+    /// 0.25 pt, speed under 2.5 pt/s); scale, tilt and alpha are unitless (displacement under
+    /// 1e-3, speed under 1e-2). A single epsilon would hold position for ~0.5 s of invisible motion.
+    public static func isSettled(value: [Double], velocity: [Double], target: [Double]) -> Bool {
+        precondition(value.count == dimension && velocity.count == dimension && target.count == dimension,
+                     "CardPose vectors must have \(dimension) components")
+        for i in 0..<dimension {
+            let (maxOffset, maxSpeed) = i < 2 ? (0.25, 2.5) : (1e-3, 1e-2)
+            if abs(value[i] - target[i]) >= maxOffset || abs(velocity[i]) >= maxSpeed { return false }
+        }
+        return true
+    }
+
     public init(vector: [Double]) {
         precondition(vector.count == Self.dimension, "CardPose vector must have \(Self.dimension) components")
         self.init(center: CGPoint(x: vector[0], y: vector[1]),

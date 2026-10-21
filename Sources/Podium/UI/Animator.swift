@@ -37,14 +37,23 @@ final class Animator {
 
     private let logger = Logger(subsystem: "dev.podium.Podium", category: "animator")
     private var entries: [ObjectIdentifier: Entry] = [:]
-    private var link: CADisplayLink!
+    private let link: CADisplayLink
     private var lastTimestamp: CFTimeInterval?
     private(set) var stats = FrameStats()
 
     init(screen: NSScreen) {
-        link = screen.displayLink(target: LinkTarget(self), selector: #selector(LinkTarget.tick(_:)))
+        let target = LinkTarget()
+        link = screen.displayLink(target: target, selector: #selector(LinkTarget.tick(_:)))
+        target.animator = self
+        link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         link.isPaused = true
         link.add(to: .main, forMode: .common)
+    }
+
+    /// The run loop retains the link, and the link's proxy only holds the Animator weakly, so
+    /// an Animator that goes away must stop its link or the proxy keeps firing into nothing.
+    deinit {
+        link.invalidate()
     }
 
     func invalidate() {
@@ -103,7 +112,8 @@ final class Animator {
         CATransaction.setDisableActions(true)
         for (key, entry) in entries {
             entry.vector.step(dt: step, spring: entry.spring)
-            if entry.vector.isSettled() {
+            let v = entry.vector
+            if CardPose.isSettled(value: v.value, velocity: v.velocity, target: v.target) {
                 entry.vector.snap(to: entry.vector.target)
                 entries[key] = nil
                 finished.append(entry)
@@ -126,8 +136,6 @@ final class Animator {
 /// The display link retains its target; this keeps it from retaining the Animator.
 private final class LinkTarget: NSObject {
     weak var animator: Animator?
-
-    init(_ animator: Animator) { self.animator = animator }
 
     @objc func tick(_ link: CADisplayLink) {
         MainActor.assumeIsolated { animator?.tick(link) }
