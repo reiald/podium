@@ -29,7 +29,9 @@ final class Coordinator {
     private var presenter: StripPresenter?
     private var interceptor: MinimizeInterceptor?
     /// What the yellow button and Cmd-M do. Settings (Task 14) will own this.
-    var minimizeBehavior: MinimizeBehavior = .strip
+    var minimizeBehavior: MinimizeBehavior = .strip {
+        didSet { publishMinimizeState() }
+    }
     /// Windows the minimize fallback is bringing back from the Dock, until the given time:
     /// their own (de)minimize and focus noise must not move stages meanwhile.
     private var unminimizing: [WindowRef: Date] = [:]
@@ -79,7 +81,10 @@ final class Coordinator {
             finishStart()
             return
         }
-        runner.onBatchEnd = { [weak self] in self?.stamp($0) }
+        runner.onBatchEnd = { [weak self] in
+            self?.stamp($0)
+            self?.publishMinimizeState()
+        }
         self.runner = runner
         let presenter = StripPresenter(mover: mover, runner: runner,
                                        board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
@@ -110,11 +115,15 @@ final class Coordinator {
         self.observer = observer
         observer.start()
 
-        let interceptor = MinimizeInterceptor(behavior: { [weak self] in self?.minimizeBehavior ?? .dock },
-                                              isManaged: { [weak self] in self?.canMinimizeToStrip($0) ?? false },
-                                              onIntercept: { [weak self] in self?.minimizeToStrip($0) })
+        let interceptor = MinimizeInterceptor { [weak self] w in
+            guard let self else { return }
+            // The click or key press was swallowed: if parking no longer applies, the user
+            // still gets a minimize, the stock one.
+            if !self.minimizeToStrip(w) { self.sendToDock(w) }
+        }
         self.interceptor = interceptor
         interceptor.start()
+        publishMinimizeState()
 
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { [weak self] in
             self?.screensChanged()
@@ -221,11 +230,13 @@ final class Coordinator {
     /// Minimize to strip: the window is parked, not minimized. It gets its own stage at the
     /// front of the strip and flies there; the rest of its stage stays on screen, and if it
     /// was alone the stage area is left empty (desktop).
-    func minimizeToStrip(_ w: WindowRef) {
+    /// False (nothing changed) if it no longer applies; the caller then sends it to the Dock.
+    @discardableResult
+    func minimizeToStrip(_ w: WindowRef) -> Bool {
         guard !applying, canMinimizeToStrip(w), let previous = board.activeStageID,
               let count = board.activeStage?.windows.count else {
-            NSLog("Podium: minimize to strip of %u (pid %d) no longer applies", w.windowID, w.pid)
-            return
+            NSLog("Podium: minimize to strip of %u (pid %d) no longer applies; using the Dock", w.windowID, w.pid)
+            return false
         }
         let old = board
         if count > 1 {
@@ -245,6 +256,14 @@ final class Coordinator {
                 app.activate()
             }
         }
+        return true
+    }
+
+    /// Tells the tap thread which windows it may intercept (on screen in the active stage).
+    private func publishMinimizeState() {
+        guard let interceptor else { return }
+        let managed = isRunning ? Set((board.activeStage?.windows ?? []).filter(canMinimizeToStrip)) : []
+        interceptor.update(.init(enabled: isRunning, behavior: minimizeBehavior, managed: managed))
     }
 
     /// Fallback for minimizes the interceptor didn't see (Window menu, custom title bars, a
@@ -254,30 +273,44 @@ final class Coordinator {
         unminimizing[w] = started.addingTimeInterval(Self.unminimizeQuiet)
         guard backend.setMinimized(false, of: w) else {
             NSLog("Podium: could not un-minimize %u (pid %d); leaving it in the Dock", w.windowID, w.pid)
-            dockInstead(w)
+            sendToDock(w)
             return
         }
         Timer.scheduledTimer(withTimeInterval: Self.unminimizePoll, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self, !self.stopped else { return timer.invalidate() }
-                if !self.backend.isMinimized(w) {
+                switch self.backend.minimizedState(of: w) {
+                case nil:
+                    // Unreadable: most likely closing. Never park it; `.closed` cleans up.
                     timer.invalidate()
-                    self.minimizeToStrip(w)
-                } else if Date().timeIntervalSince(started) > Self.unminimizeTimeout {
+                    self.unminimizing[w] = nil
+                    NSLog("Podium: cannot read AXMinimized of %u (pid %d); fallback stopped", w.windowID, w.pid)
+                case false?:
+                    timer.invalidate()
+                    if !self.minimizeToStrip(w) { self.sendToDock(w) }
+                case true?:
+                    guard Date().timeIntervalSince(started) > Self.unminimizeTimeout else { return }
                     timer.invalidate()
                     NSLog("Podium: %u (pid %d) still minimized after %.1f s; leaving it in the Dock",
                           w.windowID, w.pid, Self.unminimizeTimeout)
-                    self.dockInstead(w)
+                    self.sendToDock(w)
                 }
             }
         }
     }
 
-    /// The fallback failed: handle the minimize the stock way (Task 9).
-    private func dockInstead(_ w: WindowRef) {
+    /// Minimize to strip didn't happen (intercepted or fallback): the stock minimize instead,
+    /// handled the Task 9 way. A window still in the Dock is just recorded as minimized; one on
+    /// screen is minimized, and its `.minimized` notification skips the fallback.
+    private func sendToDock(_ w: WindowRef) {
         unminimizing[w] = nil
         dockFallback.insert(w)
-        handle(.minimized(w))
+        if backend.isMinimized(w) {
+            handle(.minimized(w))
+        } else if !backend.setMinimized(true, of: w) {
+            dockFallback.remove(w)
+            NSLog("Podium: could not minimize %u (pid %d); leaving it on screen", w.windowID, w.pid)
+        }
     }
 
     private func isUnminimizing(_ w: WindowRef) -> Bool {
@@ -291,6 +324,7 @@ final class Coordinator {
         side = side == .right ? .left : .right
         runner?.update(layout: layout)
         presenter?.boardChanged()
+        publishMinimizeState()
     }
 
     /// Launch finished (windows parked, events observed) and not stopped.
@@ -448,6 +482,7 @@ final class Coordinator {
             backend.raise(front)
         }
         presenter?.boardChanged()
+        publishMinimizeState()
     }
 
     /// Unparks; a window that fails stays in the ledger (restoreAll / recovery still own it).
@@ -485,6 +520,7 @@ final class Coordinator {
         endBatch()
         runner?.update(layout: layout)
         presenter?.boardChanged()
+        publishMinimizeState()
     }
 
     /// Stamps every window the batch touched, counting from now (the batch's end).
@@ -544,6 +580,7 @@ final class Coordinator {
         endBatch()
         runner?.screensChanged(layout: layout)
         presenter?.boardChanged()
+        publishMinimizeState()
     }
 
     /// Manageable windows of regular apps, in on-screen z-order from back to front.

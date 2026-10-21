@@ -20,7 +20,9 @@ public struct ModifierSet: OptionSet, Equatable, Sendable {
 
 public enum MinimizeTrigger: Equatable, Sendable {
     case mouseDown(subrole: String?, modifiers: ModifierSet)
-    case keyDown(keyCode: UInt16, modifiers: ModifierSet)
+    /// `characters`: what the key types ignoring modifiers (layout-aware); `keyCode` is the
+    /// physical key, informational only (key 46 is "m" on US but "," on AZERTY).
+    case keyDown(keyCode: UInt16, characters: String?, modifiers: ModifierSet)
 }
 
 public enum MinimizeDecision: Equatable, Sendable {
@@ -36,7 +38,7 @@ public func decideMinimize(_ t: MinimizeTrigger, behavior: MinimizeBehavior,
     switch t {
     case let .mouseDown(subrole, modifiers):
         return subrole == "AXMinimizeButton" && modifiers.isEmpty ? .intercept : .passThrough
-    case let .keyDown(keyCode, modifiers):
-        return keyCode == 46 && modifiers == .command ? .intercept : .passThrough
+    case let .keyDown(_, characters, modifiers):
+        return characters?.lowercased() == "m" && modifiers == .command ? .intercept : .passThrough
     }
 }

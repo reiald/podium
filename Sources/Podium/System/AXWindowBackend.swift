@@ -70,6 +70,14 @@ final class AXWindowBackend: WindowBackend {
         element(for: w).map { AX.bool(kAXMinimizedAttribute, of: $0) } ?? false
     }
 
+    /// AXMinimized, or nil when it can't be read (window gone or app not answering).
+    func minimizedState(of w: WindowRef) -> Bool? {
+        guard let e = element(for: w) else { return nil }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(e, kAXMinimizedAttribute as CFString, &value) == .success else { return nil }
+        return value as? Bool
+    }
+
     /// Sets AXMinimized; false brings a window back from the Dock.
     @discardableResult
     func setMinimized(_ minimized: Bool, of w: WindowRef) -> Bool {
