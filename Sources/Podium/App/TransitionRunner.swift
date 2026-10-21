@@ -76,19 +76,25 @@ final class TransitionRunner {
     /// Windows whose leave is waiting on a snapshot (no card yet), by token.
     private var pendingLeave: [WindowRef: Int] = [:]
     private var leaveToken = 0
-    /// Parked strip windows whose cached snapshot is being looked up for a card.
+    /// Parked windows whose cached snapshot is being looked up for a card (strip or enter).
     private var fetching: Set<WindowRef> = []
+    /// Where each strip window sat at the last full relayout; an entering window with no
+    /// card (deep in a pile, or past the last row) starts its card there.
+    private var lastPlacement: [WindowRef: (stage: Stage, index: Int, slot: StripSlot?)] = [:]
+    /// Frames to restore a window to instead of where it is when parked (drag-out).
+    private var restoreFrames: [WindowRef: CGRect] = [:]
     private var icons: [pid_t: NSImage] = [:]
 
-    init(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger, capture: Capture,
-         layout: Layout, board: @escaping () -> StageBoard) {
+    /// Nil when there is no display to draw on.
+    init?(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger, capture: Capture,
+          layout: Layout, board: @escaping () -> StageBoard) {
+        guard let primary = NSScreen.screens.first else { return nil }
         self.backend = backend
         self.mover = mover
         self.ledger = ledger
         self.capture = capture
         self.layout = layout
         self.board = board
-        let primary = NSScreen.screens.first ?? NSScreen.main!
         overlay = Overlay(screen: primary)
         animator = Animator(screen: Animator.fastestScreen() ?? primary)
         // Shown now, empty and click-through: a new overlay's first composite costs a frame.
@@ -131,6 +137,12 @@ final class TransitionRunner {
 
     func forget(_ w: WindowRef) {
         drop(w)
+        restoreFrames[w] = nil
+    }
+
+    /// The next park of `w` records `frame` as the frame to come back to.
+    func setRestoreFrame(_ frame: CGRect, for w: WindowRef) {
+        restoreFrames[w] = frame
     }
 
     /// Removes every card and the overlay and stops the display link (before every window
@@ -160,8 +172,9 @@ final class TransitionRunner {
 
     private func enter(_ w: WindowRef) {
         pendingLeave[w] = nil
+        restoreFrames[w] = nil
         guard let t = tracks[w] else {
-            if mover.isParked(w) { unparkNow([w]) }
+            if mover.isParked(w) { enterWithoutCard(w) }
             return
         }
         switch t.phase {
@@ -169,7 +182,8 @@ final class TransitionRunner {
             // Never parked; the leave is simply called off.
             drop(w)
         case .strip, .entering:
-            guard let frame = originalFrame(of: w) else {
+            guard let frame = originalFrame(of: w), isOnOverlay(frame) else {
+                // Unknown, or on another display than the overlay: instant.
                 drop(w)
                 unparkNow([w])
                 return
@@ -182,6 +196,39 @@ final class TransitionRunner {
             animator.onSettled(t.card) { [weak self] in self?.entered(w, generation: generation) }
         case .revealing:
             break
+        }
+    }
+
+    /// A parked window with no card (strip cards exist only for visible pile windows) gets
+    /// one on demand from its cached snapshot, starting at its stage's slot; no snapshot,
+    /// or no known slot: instant unpark.
+    private func enterWithoutCard(_ w: WindowRef) {
+        guard !fetching.contains(w) else { return }
+        guard let placement = lastPlacement[w], let frame = originalFrame(of: w), isOnOverlay(frame) else {
+            unparkNow([w])
+            return
+        }
+        fetching.insert(w)
+        let capture = self.capture
+        Task { @MainActor [weak self] in
+            let image = await capture.cachedSnapshot(w)
+            guard let self else { return }
+            self.fetching.remove(w)
+            // Meanwhile it may have left again, been unparked or gained a card.
+            guard self.tracks[w] == nil, self.mover.isParked(w),
+                  self.board().activeStage?.windows.contains(w) == true else { return }
+            guard let image else {
+                self.unparkNow([w])
+                return
+            }
+            let card = self.makeCard(image: image)
+            let index = min(placement.index, max(0, self.layout.tuning.pileMaxWindows - 1))
+            var start = self.stripPose(card: card, slot: placement.slot, stage: placement.stage, index: index)
+            start.alpha = 0
+            card.apply(start)
+            self.overlay.add(card)
+            self.tracks[w] = Track(card: card, phase: .strip)
+            self.enter(w)
         }
     }
 
@@ -265,7 +312,7 @@ final class TransitionRunner {
         for w in windows where pendingLeave[w] == token {
             pendingLeave[w] = nil
             guard !mover.isParked(w), !backend.isMinimized(w), let frame = backend.frame(of: w) else { continue }
-            guard let image = images[w], overlay.frame.contains(CGPoint(x: frame.midX, y: frame.midY)) else {
+            guard let image = images[w], isOnOverlay(frame) else {
                 // No snapshot (or not on the strip's display): Task 9's instant move, no card.
                 instant.append(w)
                 continue
@@ -311,7 +358,8 @@ final class TransitionRunner {
             }
             let screen = Screens.containing(frame)
             touched.append(w)
-            if mover.park(w, display: screen.frame, displayID: screen.id) {
+            if mover.park(w, display: screen.frame, displayID: screen.id,
+                          restoreFrame: restoreFrames.removeValue(forKey: w)) {
                 t.move(to: .strip)
             } else {
                 // The window is back on stage under its card; nothing to fly back from.
@@ -331,7 +379,8 @@ final class TransitionRunner {
             guard let frame = backend.frame(of: w) else { continue }
             let screen = Screens.containing(frame)
             touched.append(w)
-            if !mover.park(w, display: screen.frame, displayID: screen.id) {
+            if !mover.park(w, display: screen.frame, displayID: screen.id,
+                           restoreFrame: restoreFrames.removeValue(forKey: w)) {
                 logger.error("could not park \(w.windowID, privacy: .public) (pid \(w.pid, privacy: .public)); leaving it on screen")
             }
         }
@@ -363,11 +412,15 @@ final class TransitionRunner {
 
         let stages = b.stripStages
         let slots = stripSlots(for: stages, in: layout.screen, side: layout.side, tuning: layout.tuning)
+        if onlyStages == nil { lastPlacement = [:] }
         for stage in stages where onlyStages?.contains(stage.id) ?? true {
             let slot = slots.first { $0.stageID == stage.id }
             for (index, w) in stage.windows.enumerated() {
+                if onlyStages == nil { lastPlacement[w] = (stage, index, slot) }
+                // Only the visible pile windows have cards (full-res cards cost GPU memory).
+                let visible = slot != nil && index < layout.tuning.pileMaxWindows
                 guard let t = tracks[w] else {
-                    if mover.isParked(w) && onlyStages == nil { fetchStripCard(w) }
+                    if visible && mover.isParked(w) && onlyStages == nil { fetchStripCard(w) }
                     continue
                 }
                 guard t.phase == .strip else { continue }
@@ -376,8 +429,28 @@ final class TransitionRunner {
                 setZ(t.card, CGFloat(layout.tuning.pileMaxWindows - index))
                 animator.drive(t.card, to: stripPose(card: t.card, slot: slot, stage: stage, index: index),
                                spring: spring)
+                if !visible {
+                    // Fades out while tucking away, then goes.
+                    let generation = t.generation
+                    animator.onSettled(t.card) { [weak self] in
+                        guard let self, let t = self.tracks[w], t.phase == .strip, t.generation == generation,
+                              !self.isVisibleInStrip(w) else { return }
+                        self.drop(w)
+                    }
+                }
             }
         }
+    }
+
+    private func isVisibleInStrip(_ w: WindowRef) -> Bool {
+        let stages = board().stripStages
+        guard let row = stages.firstIndex(where: { $0.windows.contains(w) }),
+              let index = stages[row].windows.firstIndex(of: w) else { return false }
+        return row < layout.tuning.maxRowCount && index < layout.tuning.pileMaxWindows
+    }
+
+    private func isOnOverlay(_ frame: CGRect) -> Bool {
+        overlay.frame.contains(CGPoint(x: frame.midX, y: frame.midY))
     }
 
     private func stripPose(card: WindowCard, slot: StripSlot?, stage: Stage, index: Int) -> CardPose {
@@ -414,7 +487,7 @@ final class TransitionRunner {
             let image = await capture.cachedSnapshot(w)
             guard let self else { return }
             self.fetching.remove(w)
-            guard let image, self.tracks[w] == nil, self.mover.isParked(w),
+            guard let image, self.tracks[w] == nil, self.mover.isParked(w), self.isVisibleInStrip(w),
                   let stage = self.board().stripStages.first(where: { $0.windows.contains(w) }) else { return }
             let card = self.makeCard(image: image)
             let slots = stripSlots(for: self.board().stripStages, in: self.layout.screen,

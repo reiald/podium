@@ -462,3 +462,30 @@ private let visibleAboveDock = CGRect(x: 0, y: 0, width: 1000, height: 760)
         #expect(ledger.entries().map(\.window) == [b])
     }
 }
+
+@Test func parkRecordsGivenRestoreFrameAndUnparkReturnsThere() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        let before = CGRect(x: 50, y: 60, width: 300, height: 200)
+
+        #expect(mover.park(a, display: display, displayID: 1, restoreFrame: before))
+        #expect(ledger.entries().first?.originalFrame == before)
+        #expect(mover.unpark(a))
+        #expect(backend.frames[a] == before)
+    }
+}
+
+@Test func failedParkWithRestoreFrameLeavesWindowWhereItIs() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        backend.clampTo = display
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(!mover.park(a, display: display, displayID: 1, restoreFrame: CGRect(x: 0, y: 0, width: 300, height: 200)))
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+    }
+}

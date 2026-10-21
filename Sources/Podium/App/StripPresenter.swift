@@ -6,20 +6,24 @@ import struct PodiumCore.WindowRef
 /// The strip's input side: the StripPanel's clicks and hover, auto-hide, and dragging a
 /// stage window's title bar into the band. It reads the board and tells the Coordinator
 /// what the user asked for; the TransitionRunner draws.
+///
+/// Nothing here makes AX calls: the poll and the mouse monitors run constantly, and an AX
+/// call to a hung app blocks the main thread (and every animation) for up to a second.
+/// Window frames come from the window server's list instead.
 @MainActor
 final class StripPresenter {
     var onSelect: (UUID) -> Void = { _ in }
     var onShiftClick: (UUID) -> Void = { _ in }
     var onCombine: (UUID) -> Void = { _ in }
-    var onDragOut: (WindowRef) -> Void = { _ in }
+    /// The dragged window and its frame before the drag.
+    var onDragOut: (WindowRef, CGRect) -> Void = { _, _ in }
 
     private static let pollInterval = 1.0 / 30.0
-    /// Overlap frames are re-read from AX every this many polls (30 Hz / 3 = 10 Hz).
+    /// Overlap frames are re-read every this many polls (30 Hz / 3 = 10 Hz).
     private static let frameRefreshEvery = 3
     /// A title-bar drag must move the window at least this far to count.
     private static let minimumDragDistance: CGFloat = 2
 
-    private let backend: AXWindowBackend
     private let mover: WindowMover
     private let runner: TransitionRunner
     private let board: () -> StageBoard
@@ -37,8 +41,7 @@ final class StripPresenter {
     private var layout: TransitionRunner.Layout { runner.layout }
     private var band: CGRect { stripBand(in: layout.screen, side: layout.side, tuning: layout.tuning) }
 
-    init(backend: AXWindowBackend, mover: WindowMover, runner: TransitionRunner, board: @escaping () -> StageBoard) {
-        self.backend = backend
+    init(mover: WindowMover, runner: TransitionRunner, board: @escaping () -> StageBoard) {
         self.mover = mover
         self.runner = runner
         self.board = board
@@ -121,38 +124,50 @@ final class StripPresenter {
         updateHover()
     }
 
-    /// AX frames of the active stage's on-screen windows.
     private func refreshStageFrames() {
+        stageFrames = Array(activeStageFrames().values)
+    }
+
+    /// Window-server bounds (top-left-origin global, like AX) of the active stage's
+    /// on-screen windows. No app IPC, so a hung app can't stall the caller.
+    private func activeStageFrames() -> [WindowRef: CGRect] {
         let b = board()
-        stageFrames = (b.activeStage?.windows ?? []).compactMap { w in
-            mover.isParked(w) || b.isMinimized(w) ? nil : backend.frame(of: w)
+        let wanted = (b.activeStage?.windows ?? []).filter { !mover.isParked($0) && !b.isMinimized($0) }
+        guard !wanted.isEmpty,
+              let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+                as? [[String: Any]] else { return [:] }
+        let byID = Dictionary(wanted.map { ($0.windowID, $0) }, uniquingKeysWith: { first, _ in first })
+        var frames: [WindowRef: CGRect] = [:]
+        for window in info {
+            guard let number = window[kCGWindowNumber as String] as? UInt32, let w = byID[number],
+                  let bounds = window[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+            frames[w] = frame
         }
+        return frames
     }
 
     // MARK: - Drag-out
 
     private func mouseDown() {
-        let b = board()
-        var frames: [WindowRef: CGRect] = [:]
-        for w in b.activeStage?.windows ?? [] where !mover.isParked(w) {
-            if let frame = backend.frame(of: w) { frames[w] = frame }
-        }
-        framesAtMouseDown = frames
+        framesAtMouseDown = activeStageFrames()
     }
 
-    /// A stage window whose title bar was dragged and released over the band.
+    /// A stage window whose title bar was dragged and released over the band: the one
+    /// active-stage window that moved without changing size since the mouse went down.
     private func mouseUp() {
         defer { framesAtMouseDown = [:] }
-        guard !framesAtMouseDown.isEmpty, !runner.isHidden, band.contains(Self.pointer()),
-              let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              let id = AX.focusedWindow(of: pid).flatMap(AX.windowID(of:)) else { return }
-        let w = WindowRef(pid: pid, windowID: id)
-        guard let before = framesAtMouseDown[w], let after = backend.frame(of: w) else { return }
-        let moved = hypot(after.minX - before.minX, after.minY - before.minY) >= Self.minimumDragDistance
-        // A resize also moves the origin; only a move keeps the size.
-        let sameSize = abs(after.width - before.width) <= 1 && abs(after.height - before.height) <= 1
-        guard moved, sameSize else { return }
-        onDragOut(w)
+        guard !framesAtMouseDown.isEmpty, !runner.isHidden, band.contains(Self.pointer()) else { return }
+        let now = activeStageFrames()
+        let moved = framesAtMouseDown.filter { w, before in
+            guard let after = now[w] else { return false }
+            let distance = hypot(after.minX - before.minX, after.minY - before.minY)
+            // A resize also moves the origin; only a move keeps the size.
+            let sameSize = abs(after.width - before.width) <= 1 && abs(after.height - before.height) <= 1
+            return distance >= Self.minimumDragDistance && sameSize
+        }
+        guard moved.count == 1, let (w, before) = moved.first else { return }
+        onDragOut(w, before)
     }
 
     /// The pointer in AX (top-left-origin) coordinates.

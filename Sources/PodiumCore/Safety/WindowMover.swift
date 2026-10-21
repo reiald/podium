@@ -34,16 +34,20 @@ public final class WindowMover {
     /// Returns false, with the window back on stage, if it could not be parked.
     /// An already-parked window keeps its recorded original frame and is moved to
     /// `display`'s corner; if that fails it is unparked.
-    public func park(_ w: WindowRef, display: CGRect, displayID: UInt32) -> Bool {
+    ///
+    /// `restoreFrame`, when given, is recorded as the frame to come back to instead of the
+    /// window's current one (e.g. where a window was before it was dragged into the strip).
+    /// A failed park still leaves the window where it is now.
+    public func park(_ w: WindowRef, display: CGRect, displayID: UInt32, restoreFrame: CGRect? = nil) -> Bool {
         // Already parked: its current frame is the parked one, never record it as original.
         if entry(for: w) != nil {
             if moveToParking(w, display: display) { return true }
             _ = unpark(w)
             return false
         }
-        guard let original = backend.frame(of: w) else { return false }
+        guard let current = backend.frame(of: w) else { return false }
         let e = ParkedEntry(window: w, bundleID: backend.bundleID(of: w.pid),
-                            originalFrame: original, displayID: displayID)
+                            originalFrame: restoreFrame ?? current, displayID: displayID)
         do {
             try ledger.record(e)
         } catch {
@@ -53,7 +57,7 @@ public final class WindowMover {
         if moveToParking(w, display: display) { return true }
 
         log.error("Window \(String(describing: w)) did not leave the screen; moving it back")
-        if move(w, to: original) {
+        if move(w, to: current) {
             forget(w)
         } else {
             // Keep the entry so restoreAll / recovery can still bring it back.

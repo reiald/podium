@@ -57,16 +57,22 @@ final class Coordinator {
     func start() {
         guard runner == nil else { return }
         seedBoard()
-        let runner = TransitionRunner(backend: backend, mover: mover, ledger: ledger, capture: capture,
-                                      layout: layout, board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
+        guard let runner = TransitionRunner(backend: backend, mover: mover, ledger: ledger, capture: capture,
+                                            layout: layout, board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
+        else {
+            // No display: nothing to animate on; instant moves only.
+            NSLog("Podium: no screen; stage switching without animation")
+            finishStart()
+            return
+        }
         runner.onBatchEnd = { [weak self] in self?.stamp($0) }
         self.runner = runner
-        let presenter = StripPresenter(backend: backend, mover: mover, runner: runner,
+        let presenter = StripPresenter(mover: mover, runner: runner,
                                        board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
         presenter.onSelect = { [weak self] in self?.select(stageID: $0) }
         presenter.onShiftClick = { [weak self] in self?.addFrontWindowToActive(stageID: $0) }
         presenter.onCombine = { [weak self] in self?.combineIntoActive(stageID: $0) }
-        presenter.onDragOut = { [weak self] in self?.dragOut($0) }
+        presenter.onDragOut = { [weak self] in self?.dragOut($0, restoreTo: $1) }
         self.presenter = presenter
         // Overlay (in the runner) and panel are shown now, not at the first transition.
         presenter.start()
@@ -171,13 +177,15 @@ final class Coordinator {
 
     /// A stage window's title bar dragged into the strip band: the window gets its own stage
     /// (`moveToOwnStage`), and, as in Stage Manager, that stage goes to the strip while the
-    /// rest of the old stage stays on screen.
-    func dragOut(_ w: WindowRef) {
+    /// rest of the old stage stays on screen. It comes back to `restoreTo`, where it was
+    /// before the drag, not to where it was dropped over the band.
+    func dragOut(_ w: WindowRef, restoreTo: CGRect) {
         guard isRunning, !applying, let previous = board.activeStageID,
               board.activeStage?.windows.contains(w) == true else { return }
         let old = board
         board.moveToOwnStage(w)
         guard board != old else { return }
+        runner?.setRestoreFrame(restoreTo, for: w)
         board.activate(stageID: previous)
         if let front = board.activeStage?.windows.first { board.windowFocused(front) }
         apply(from: old)
@@ -314,6 +322,10 @@ final class Coordinator {
         guard board != old else { return }
         var plan = transitionPlan(from: old, to: board)
         plan.leaving.removeAll { alreadyOffScreen.contains($0) }
+        // A parked window can join the active stage without having been in the strip (it
+        // re-joined the board, e.g. a kept ledger entry focused via Cmd-`): it enters too.
+        let entering = Set(plan.entering)
+        plan.entering += (board.activeStage?.windows ?? []).filter { !entering.contains($0) && mover.isParked($0) }
         for w in alreadyOffScreen { runner?.forget(w) }
         // In flight from the start: the moves happen a few frames (or a whole flight) later,
         // and the focus noise of the app switch must not bounce stages meanwhile.
