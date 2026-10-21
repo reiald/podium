@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var signalSources: [DispatchSourceSignal] = []
     private var trustTimer: Timer?
     private var coordinator: Coordinator?
+    private var debugCards: DebugCards?
     private lazy var capture: Capture = {
         let mover = self.mover
         return Capture(isParked: { mover.isParked($0) })
@@ -23,6 +24,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        if CommandLine.arguments.contains("--debug-cards") {
+            // No permission prompts, no Coordinator, no capture: just cards and springs.
+            let debugCards = DebugCards()
+            self.debugCards = debugCards
+            debugCards.start()
+            return
+        }
         NSLog("Podium: AXIsProcessTrusted=%d", AXIsProcessTrusted())
         installStatusItem()
         installSignalHandlers()
@@ -40,6 +48,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Debug-cards mode never parks anything, so it must not touch other apps' windows.
+        guard debugCards == nil else { return }
         restoreAll()
     }
 
