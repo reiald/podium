@@ -1,0 +1,264 @@
+import Testing
+import Foundation
+import CoreGraphics
+@testable import PodiumCore
+
+/// In-memory window server. Can refuse moves, or clamp windows so they stay on a screen.
+private final class FakeBackend: WindowBackend {
+    var frames: [WindowRef: CGRect] = [:]
+    var refuseMoves: Set<WindowRef> = []
+    /// When set, every move is clamped so the window stays fully inside this rect.
+    var clampTo: CGRect?
+    var onSetOrigin: ((CGPoint, WindowRef) -> Void)?
+    private(set) var moves: [(WindowRef, CGPoint)] = []
+
+    func frame(of w: WindowRef) -> CGRect? { frames[w] }
+
+    func setOrigin(_ p: CGPoint, of w: WindowRef) -> Bool {
+        onSetOrigin?(p, w)
+        moves.append((w, p))
+        guard var f = frames[w], !refuseMoves.contains(w) else { return false }
+        f.origin = p
+        if let c = clampTo {
+            f.origin.x = min(max(f.minX, c.minX), c.maxX - f.width)
+            f.origin.y = min(max(f.minY, c.minY), c.maxY - f.height)
+        }
+        frames[w] = f
+        return true
+    }
+
+    func liveWindows() -> Set<WindowRef> { Set(frames.keys) }
+    func bundleID(of pid: Int32) -> String? { "com.example.\(pid)" }
+}
+
+private let display = CGRect(x: 0, y: 0, width: 1000, height: 800)
+private let a = WindowRef(pid: 1, windowID: 10)
+private let b = WindowRef(pid: 2, windowID: 20)
+private let frameA = CGRect(x: 100, y: 100, width: 300, height: 200)
+private let frameB = CGRect(x: 400, y: 300, width: 500, height: 400)
+
+private func withLedger(_ body: (URL, ParkingLedger) throws -> Void) throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    let url = dir.appendingPathComponent("parked.json")
+    try body(dir, ParkingLedger(fileURL: url))
+}
+
+private func makeReadOnly(_ dir: URL) throws {
+    try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+}
+
+@Test func parkRecordsBeforeMoving() throws {
+    try withLedger { dir, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        var ledgerAtMove: [ParkedEntry]?
+        backend.onSetOrigin = { _, _ in if ledgerAtMove == nil { ledgerAtMove = ledger.entries() } }
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(mover.park(a, display: display, displayID: 7))
+        #expect(ledgerAtMove == [ParkedEntry(window: a, bundleID: "com.example.1", originalFrame: frameA, displayID: 7)])
+        #expect(backend.frames[a]?.origin == CGPoint(x: 999, y: 799))
+        #expect(mover.isParked(a))
+        // Durable: a fresh ledger on the same file sees the entry.
+        #expect(ParkingLedger(fileURL: dir.appendingPathComponent("parked.json")).entries().map(\.window) == [a])
+    }
+}
+
+@Test func parkFailsWhenWindowDoesNotLeaveScreen() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        backend.clampTo = display
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(!mover.park(a, display: display, displayID: 1))
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+        #expect(!mover.isParked(a))
+    }
+}
+
+@Test func parkFailsWhenMoveIsRefused() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        backend.refuseMoves = [a]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(!mover.park(a, display: display, displayID: 1))
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func parkDoesNotMoveWhenLedgerCannotRecord() throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer {
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        try? FileManager.default.removeItem(at: dir)
+    }
+    let url = dir.appendingPathComponent("parked.json")
+    try Data("not a ledger".utf8).write(to: url)
+    try makeReadOnly(dir)
+    let ledger = ParkingLedger(fileURL: url)
+    let backend = FakeBackend()
+    backend.frames = [a: frameA]
+    let mover = WindowMover(backend: backend, ledger: ledger)
+
+    #expect(!mover.park(a, display: display, displayID: 1))
+    #expect(backend.moves.isEmpty)
+    #expect(backend.frames[a] == frameA)
+}
+
+@Test func parkingAnAlreadyParkedWindowKeepsTrueOriginal() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(mover.park(a, display: display, displayID: 1))
+        #expect(mover.park(a, display: display, displayID: 1))
+        #expect(ledger.entries().map(\.originalFrame) == [frameA])
+        #expect(mover.unpark(a))
+        #expect(backend.frames[a] == frameA)
+    }
+}
+
+@Test func unparkRestoresOriginalFrameAndClearsLedger() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+
+        #expect(mover.unpark(a))
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+        #expect(!mover.isParked(a))
+    }
+}
+
+@Test func unparkKeepsLedgerIfMoveFails() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+        backend.refuseMoves = [a]
+
+        #expect(!mover.unpark(a))
+        #expect(ledger.entries().map(\.window) == [a])
+        #expect(mover.isParked(a))
+    }
+}
+
+@Test func unparkSucceedsWhenAppRoundsWithinOnePoint() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+        backend.onSetOrigin = { p, w in
+            if p == frameA.origin { backend.refuseMoves = [w]; backend.frames[w]?.origin = CGPoint(x: p.x + 0.5, y: p.y - 1) }
+        }
+
+        #expect(mover.unpark(a))
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func unparkRestoresEvenIfLedgerCannotBeUpdated() throws {
+    try withLedger { dir, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+        try makeReadOnly(dir)
+
+        #expect(mover.unpark(a))
+        #expect(backend.frames[a] == frameA)
+    }
+}
+
+@Test func restoreAllUnparksEverything() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA, b: frameB]
+        let first = WindowMover(backend: backend, ledger: ledger)
+        #expect(first.park(a, display: display, displayID: 1))
+        #expect(first.park(b, display: display, displayID: 1))
+
+        // A different mover instance: restoreAll works from the ledger, not memory.
+        WindowMover(backend: backend, ledger: ledger).restoreAll()
+        #expect(backend.frames[a] == frameA)
+        #expect(backend.frames[b] == frameB)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func restoreAllForgetsWindowsThatNoLongerExist() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA, b: frameB]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+        #expect(mover.park(b, display: display, displayID: 1))
+        backend.frames[b] = nil
+
+        mover.restoreAll()
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func recoverUsesRecoveryActions() throws {
+    try withLedger { _, ledger in
+        let offScreen = CGRect(x: 3000, y: 100, width: 300, height: 200)
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: frameA, displayID: 1))
+        try ledger.record(ParkedEntry(window: b, bundleID: nil, originalFrame: offScreen, displayID: 1))
+        let dead = WindowRef(pid: 3, windowID: 30)
+        try ledger.record(ParkedEntry(window: dead, bundleID: nil, originalFrame: frameA, displayID: 1))
+        let backend = FakeBackend()
+        backend.frames = [a: CGRect(origin: CGPoint(x: 999, y: 799), size: frameA.size),
+                          b: CGRect(origin: CGPoint(x: 999, y: 799), size: offScreen.size)]
+
+        WindowMover(backend: backend, ledger: ledger).recover(visibleScreens: [display])
+        #expect(backend.frames[a] == frameA)
+        #expect(backend.frames[b] == CGRect(x: 350, y: 300, width: 300, height: 200))
+        #expect(ledger.entries().isEmpty)
+        #expect(!backend.moves.contains { $0.0 == dead })
+    }
+}
+
+@Test func recoverKeepsEntryWhenRestoreFails() throws {
+    try withLedger { _, ledger in
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: frameA, displayID: 1))
+        let backend = FakeBackend()
+        backend.frames = [a: CGRect(origin: CGPoint(x: 999, y: 799), size: frameA.size)]
+        backend.refuseMoves = [a]
+
+        WindowMover(backend: backend, ledger: ledger).recover(visibleScreens: [display])
+        #expect(ledger.entries().map(\.window) == [a])
+    }
+}
+
+@Test func reparkFollowsNewDisplayBounds() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA, b: frameB]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+        #expect(mover.park(b, display: display, displayID: 1))
+
+        let bigger = CGRect(x: 0, y: 0, width: 1600, height: 1000)
+        mover.repark(display: bigger)
+        #expect(backend.frames[a]?.origin == CGPoint(x: 1599, y: 999))
+        #expect(backend.frames[b]?.origin == CGPoint(x: 1599, y: 999))
+        #expect(ledger.entries().map(\.originalFrame) == [frameA, frameB])
+    }
+}
