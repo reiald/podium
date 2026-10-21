@@ -2,12 +2,14 @@ import AppKit
 import ApplicationServices
 import PodiumCore
 
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let backend = AXWindowBackend()
     private lazy var mover = WindowMover(backend: backend, ledger: ParkingLedger(fileURL: Self.ledgerURL))
     private var signalSources: [DispatchSourceSignal] = []
     private var trustTimer: Timer?
+    private var coordinator: Coordinator?
 
     private static var ledgerURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -27,7 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             trustTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
                 guard AXIsProcessTrusted() else { return }
                 timer.invalidate()
-                self?.accessibilityGranted()
+                MainActor.assumeIsolated { self?.accessibilityGranted() }
             }
         }
     }
@@ -39,13 +41,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func accessibilityGranted() {
         mover.recover(visibleScreens: backend.visibleScreens())
         if let bundleID = Self.debugParkBundle() {
+            // The kill test parks one app's windows by hand; stage switching would fight it.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.debugPark(bundleID: bundleID) }
+            return
         }
+        let coordinator = Coordinator(backend: backend, mover: mover)
+        self.coordinator = coordinator
+        coordinator.start()
     }
 
     @objc private func restoreAll() {
         guard AXIsProcessTrusted() else { return }
-        mover.restoreAll()
+        if let coordinator {
+            // Stops stage switching too, so restored windows stay put.
+            coordinator.restoreAll()
+            self.coordinator = nil
+        } else {
+            mover.restoreAll()
+        }
     }
 
     // MARK: - Setup
@@ -69,7 +82,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
-                self?.restoreAll()
+                MainActor.assumeIsolated { self?.restoreAll() }
                 exit(0)
             }
             source.resume()

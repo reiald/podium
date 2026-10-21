@@ -57,12 +57,31 @@ final class AXWindowBackend: WindowBackend {
 
     /// Standard, non-minimized, non-full-screen windows of `pid`.
     func manageableWindows(of pid: Int32) -> [WindowRef] {
-        windows(of: pid).compactMap { ref, e in
-            isManageable(role: AX.string(kAXRoleAttribute, of: e),
-                         subrole: AX.string(kAXSubroleAttribute, of: e),
-                         isFullscreen: AX.bool("AXFullScreen", of: e),
-                         isMinimized: AX.bool(kAXMinimizedAttribute, of: e)) ? ref : nil
-        }
+        windows(of: pid).compactMap { ref, e in Self.manageable(e) ? ref : nil }
+    }
+
+    /// Whether `w` is a standard, non-minimized, non-full-screen window.
+    func canManage(_ w: WindowRef) -> Bool {
+        guard let e = element(for: w) else { return false }
+        return Self.manageable(e)
+    }
+
+    func isMinimized(_ w: WindowRef) -> Bool {
+        element(for: w).map { AX.bool(kAXMinimizedAttribute, of: $0) } ?? false
+    }
+
+    /// Brings `w` to the front of its app's windows.
+    @discardableResult
+    func raise(_ w: WindowRef) -> Bool {
+        guard let e = element(for: w) else { return false }
+        return AXUIElementPerformAction(e, kAXRaiseAction as CFString) == .success
+    }
+
+    static func manageable(_ e: AXUIElement) -> Bool {
+        isManageable(role: AX.string(kAXRoleAttribute, of: e),
+                     subrole: AX.string(kAXSubroleAttribute, of: e),
+                     isFullscreen: AX.bool("AXFullScreen", of: e),
+                     isMinimized: AX.bool(kAXMinimizedAttribute, of: e))
     }
 
     private static func isAlive(_ pid: Int32) -> Bool {
