@@ -30,6 +30,7 @@ final class StripPresenter {
     private let panel: StripPanel
     private var latch = HoverLatch()
     private var autoHide: AutoHide
+    private var autoHideEnabled = true
     private var pointerInPanel: CGPoint?
     private var pollTimer: Timer?
     private var pollTick = 0
@@ -104,6 +105,17 @@ final class StripPresenter {
 
     // MARK: - Auto-hide
 
+    /// Off: the strip never hides, and shows again if it was hidden.
+    func setAutoHideEnabled(_ enabled: Bool) {
+        autoHideEnabled = enabled
+        guard !enabled else { return }
+        autoHide = AutoHide(tuning: runner.layout.tuning)
+        guard runner.isHidden else { return }
+        runner.setHidden(false)
+        updateMouseTaking()
+        updateHover()
+    }
+
     private func poll() {
         pollTick += 1
         if pollTick % Self.frameRefreshEvery == 1 { refreshStageFrames() }
@@ -114,6 +126,7 @@ final class StripPresenter {
             return i.isNull ? sum : sum + i.width * i.height
         }
         let overlap = area > 0 ? min(1, Double(covered / area)) : 0
+        guard autoHideEnabled else { return }
         let wasHidden = autoHide.isHidden
         autoHide.update(overlapFraction: overlap, pointer: Self.pointer(), band: band,
                         screen: layout.screen, side: layout.side, now: ProcessInfo.processInfo.systemUptime)

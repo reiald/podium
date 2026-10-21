@@ -3,7 +3,15 @@ import ApplicationServices
 import PodiumCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private enum MenuID { case power, setUp, left, right, minimizeStrip, minimizeDock, autoHide, restore, stageManager }
+    private var menuItems: [MenuID: NSMenuItem] = [:]
+    private let settings = Settings()
+    private var onboarding: OnboardingWindowController?
+    /// Accessibility was revoked while running; recovery waits for it to return.
+    private var accessibilityLost = false
+    /// A debug flag parked windows by hand; no Coordinator may start.
+    private var debugHold = false
     private var statusItem: NSStatusItem?
     private let backend = AXWindowBackend()
     private lazy var ledger = ParkingLedger(fileURL: Self.ledgerURL)
@@ -31,45 +39,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             debugCards.start()
             return
         }
-        NSLog("Podium: AXIsProcessTrusted=%d", AXIsProcessTrusted())
+        NSLog("Podium: AXIsProcessTrusted=%d screenRecording=%d", AXIsProcessTrusted(), CGPreflightScreenCaptureAccess())
         installStatusItem()
         installSignalHandlers()
 
-        if AXIsProcessTrusted() {
-            accessibilityGranted()
-        } else {
-            AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-            trustTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
-                guard AXIsProcessTrusted() else { return }
-                timer.invalidate()
-                MainActor.assumeIsolated { self?.accessibilityGranted() }
-            }
+        // A previous run (or crash) may have left windows parked.
+        if AXIsProcessTrusted() { mover.recover(visibleScreens: backend.visibleScreens()) }
+        if !hasPermissions || !settings.onboarded { showOnboarding() }
+        syncCoordinator()
+
+        // One poll covers everything permission-related: the first grant, a revoke while
+        // running, and the grant coming back. Common modes so menus and alerts don't stall it.
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.tick() }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        trustTimer = timer
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // Debug-cards mode never parks anything, so it must not touch other apps' windows.
         guard debugCards == nil else { return }
-        restoreAll()
+        restoreWindows()
     }
 
-    private func accessibilityGranted() {
+    // MARK: - Permissions and lifecycle
+
+    private var hasPermissions: Bool { AXIsProcessTrusted() && CGPreflightScreenCaptureAccess() }
+
+    /// Podium manages windows only when it is on, both permissions are granted and the
+    /// onboarding was completed.
+    private var shouldManage: Bool { settings.enabled && settings.onboarded && hasPermissions }
+
+    private func tick() {
+        if coordinator != nil, !AXIsProcessTrusted() {
+            accessibilityRevoked()
+            return
+        }
+        if accessibilityLost, AXIsProcessTrusted() {
+            NSLog("Podium: Accessibility is back; recovering")
+            accessibilityLost = false
+        }
+        syncCoordinator()
+    }
+
+    /// Without Accessibility no window can move: stop everything but keep the ledger, so the
+    /// recovery that runs when the permission returns puts the windows back.
+    private func accessibilityRevoked() {
+        NSLog("Podium: Accessibility revoked; suspending")
+        coordinator?.suspend()
+        coordinator = nil
+        accessibilityLost = true
+        let alert = NSAlert()
+        alert.messageText = "Podium lost Accessibility access"
+        alert.informativeText = "Podium can't move windows without it, so it has stopped. Your windows will be restored as soon as you grant Accessibility access again."
+        alert.addButton(withTitle: "Open Accessibility Settings")
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn,
+           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    /// Starts or stops the Coordinator so it matches `shouldManage`.
+    private func syncCoordinator() {
+        guard debugHold == false else { return }
+        if shouldManage, coordinator == nil {
+            startManaging()
+        } else if !shouldManage, let coordinator {
+            if AXIsProcessTrusted() { coordinator.restoreAll() } else { coordinator.suspend() }
+            self.coordinator = nil
+        }
+    }
+
+    /// A full fresh start: recovery, then a new Coordinator (seed, observer, tap, strip).
+    private func startManaging() {
         mover.recover(visibleScreens: backend.visibleScreens())
         if let bundleID = Self.debugParkBundle() {
             // The kill test parks one app's windows by hand; stage switching would fight it.
+            debugHold = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.debugPark(bundleID: bundleID) }
             return
         }
         if let bundleID = Self.debugArgument("--debug-capture-parked") {
+            debugHold = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.debugCaptureParked(bundleID: bundleID) }
             return
         }
         let coordinator = Coordinator(backend: backend, mover: mover, ledger: ledger, capture: capture)
+        coordinator.setSide(settings.side)
+        coordinator.minimizeBehavior = settings.minimizeBehavior
+        coordinator.autoHideEnabled = settings.autoHide
         self.coordinator = coordinator
         coordinator.start()
     }
 
-    @objc private func restoreAll() {
+    /// Puts every window back without changing any setting (quit, signals).
+    private func restoreWindows() {
         guard AXIsProcessTrusted() else { return }
         if let coordinator {
             // Stops stage switching too, so restored windows stay put.
@@ -80,6 +147,67 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func showOnboarding() {
+        if onboarding == nil {
+            onboarding = OnboardingWindowController(
+                onTurnedOffAppleStageManager: { [weak self] in self?.settings.turnedOffAppleStageManager = true },
+                onFinish: { [weak self] completed in
+                    guard let self else { return }
+                    if completed { self.settings.onboarded = true }
+                    self.syncCoordinator()
+                })
+        }
+        onboarding?.show()
+    }
+
+    // MARK: - Menu actions
+
+    @objc private func togglePodium() {
+        if !settings.enabled, !(hasPermissions && settings.onboarded) {
+            settings.enabled = true
+            showOnboarding()
+            return
+        }
+        settings.enabled.toggle()
+        syncCoordinator()
+    }
+
+    @objc private func setSideLeft() { setSide(.left) }
+    @objc private func setSideRight() { setSide(.right) }
+
+    private func setSide(_ side: StripSide) {
+        settings.side = side
+        coordinator?.setSide(side)
+    }
+
+    @objc private func setMinimizeStrip() { setMinimize(.strip) }
+    @objc private func setMinimizeDock() { setMinimize(.dock) }
+
+    private func setMinimize(_ behavior: MinimizeBehavior) {
+        settings.minimizeBehavior = behavior
+        coordinator?.minimizeBehavior = behavior
+    }
+
+    @objc private func toggleAutoHide() {
+        settings.autoHide.toggle()
+        coordinator?.autoHideEnabled = settings.autoHide
+    }
+
+    /// Emergency action: restores every window and leaves Podium Off (the menu shows it);
+    /// turn it back on from the menu.
+    @objc private func restoreAll() {
+        settings.enabled = false
+        syncCoordinator()
+        if AXIsProcessTrusted() { mover.restoreAll() }
+    }
+
+    @objc private func setUpPodium() { showOnboarding() }
+
+    @objc private func turnAppleStageManagerBackOn() {
+        _ = AppleStageManager.enable()
+        settings.turnedOffAppleStageManager = false
+    }
+
     // MARK: - Setup
 
     private func installStatusItem() {
@@ -87,9 +215,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.image = NSImage(systemSymbolName: "rectangle.split.3x1", accessibilityDescription: "Podium")
 
         let menu = NSMenu()
-        let restore = NSMenuItem(title: "Restore All Windows", action: #selector(restoreAll), keyEquivalent: "")
-        restore.target = self
-        menu.addItem(restore)
+        menu.autoenablesItems = false
+        menu.delegate = self
+        func add(_ id: MenuID, _ title: String, _ action: Selector) {
+            let m = NSMenuItem(title: title, action: action, keyEquivalent: "")
+            m.target = self
+            menu.addItem(m)
+            menuItems[id] = m
+        }
+        add(.power, "Turn Podium Off", #selector(togglePodium))
+        add(.setUp, "Set Up Podium…", #selector(setUpPodium))
+        menu.addItem(.separator())
+        add(.left, "Strip on Left", #selector(setSideLeft))
+        add(.right, "Strip on Right", #selector(setSideRight))
+        menu.addItem(.separator())
+        add(.minimizeStrip, "Minimize to Strip", #selector(setMinimizeStrip))
+        add(.minimizeDock, "Minimize to Dock", #selector(setMinimizeDock))
+        menu.addItem(.separator())
+        add(.autoHide, "Auto-hide Strip", #selector(toggleAutoHide))
+        menu.addItem(.separator())
+        add(.restore, "Restore All Windows", #selector(restoreAll))
+        add(.stageManager, "Turn Apple's Stage Manager Back On", #selector(turnAppleStageManagerBackOn))
         if Self.debugMenuEnabled {
             let flip = NSMenuItem(title: "Flip Side", action: #selector(flipSide), keyEquivalent: "")
             flip.target = self
@@ -101,12 +247,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = item
     }
 
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let ready = hasPermissions && settings.onboarded
+        menuItems[.power]?.title = settings.enabled ? "Turn Podium Off" : "Turn Podium On"
+        menuItems[.setUp]?.isHidden = ready
+        menuItems[.left]?.state = settings.side == .left ? .on : .off
+        menuItems[.right]?.state = settings.side == .right ? .on : .off
+        menuItems[.minimizeStrip]?.state = settings.minimizeBehavior == .strip ? .on : .off
+        menuItems[.minimizeDock]?.state = settings.minimizeBehavior == .dock ? .on : .off
+        menuItems[.autoHide]?.state = settings.autoHide ? .on : .off
+        menuItems[.stageManager]?.isHidden = !(settings.turnedOffAppleStageManager && !AppleStageManager.isEnabled)
+    }
+
     private func installSignalHandlers() {
         for sig in [SIGINT, SIGTERM] {
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler { [weak self] in
-                MainActor.assumeIsolated { self?.restoreAll() }
+                MainActor.assumeIsolated { self?.restoreWindows() }
                 exit(0)
             }
             source.resume()
@@ -126,7 +284,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func flipSide() {
-        coordinator?.flipSide()
+        setSide(settings.side == .right ? .left : .right)
     }
 
     private static func debugParkBundle() -> String? {

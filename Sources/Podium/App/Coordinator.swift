@@ -28,9 +28,13 @@ final class Coordinator {
     private var runner: TransitionRunner?
     private var presenter: StripPresenter?
     private var interceptor: MinimizeInterceptor?
-    /// What the yellow button and Cmd-M do. Settings (Task 14) will own this.
+    /// What the yellow button and Cmd-M do.
     var minimizeBehavior: MinimizeBehavior = .strip {
         didSet { publishMinimizeState() }
+    }
+    /// False: the strip never slides away (auto-hide bypassed).
+    var autoHideEnabled = true {
+        didSet { presenter?.setAutoHideEnabled(autoHideEnabled) }
     }
     /// Windows the minimize fallback is bringing back from the Dock, until the given time:
     /// their own (de)minimize and focus noise must not move stages meanwhile.
@@ -93,6 +97,7 @@ final class Coordinator {
         presenter.onCombine = { [weak self] in self?.combineIntoActive(stageID: $0) }
         presenter.onDragOut = { [weak self] in self?.dragOut($0, restoreTo: $1) }
         self.presenter = presenter
+        presenter.setAutoHideEnabled(autoHideEnabled)
         // Overlay (in the runner) and panel are shown now, not at the first transition.
         presenter.start()
 
@@ -145,8 +150,20 @@ final class Coordinator {
         startSnapshotTimer()
     }
 
-    /// Stops managing windows and puts every parked window back.
+    /// Stops managing windows and puts every parked window back. A Coordinator is not
+    /// restartable: Off then On makes a new one.
     func restoreAll() {
+        stop()
+        mover.restoreAll()
+    }
+
+    /// Stops managing without touching any window (Accessibility was revoked, so none
+    /// can be moved): cards, strip, observer and tap go away; the ledger keeps what is parked.
+    func suspend() {
+        stop()
+    }
+
+    private func stop() {
         stopped = true
         interceptor?.stop()
         interceptor = nil
@@ -159,7 +176,6 @@ final class Coordinator {
         stopSnapshotTimer()
         for (center, token) in notificationTokens { center.removeObserver(token) }
         notificationTokens = []
-        mover.restoreAll()
     }
 
     // MARK: - Events
@@ -319,9 +335,14 @@ final class Coordinator {
         return unminimizing[w] != nil
     }
 
-    /// Debug menu: moves the strip to the other side; every card retargets live.
     func flipSide() {
-        side = side == .right ? .left : .right
+        setSide(side == .right ? .left : .right)
+    }
+
+    /// Moves the strip to `newSide`; every card retargets live, through springs.
+    func setSide(_ newSide: StripSide) {
+        guard newSide != side else { return }
+        side = newSide
         runner?.update(layout: layout)
         presenter?.boardChanged()
         publishMinimizeState()
