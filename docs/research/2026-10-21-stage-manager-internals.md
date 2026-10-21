@@ -60,3 +60,19 @@ The Dock calls `setDockInfoWithDisplayID:currentInset:maximumInset:orientation:`
 - The exact spring response, damping and timing values.
 - Whether third-party apps that don't use AppKit (Electron, Java) also route minimize through this service.
 - How Stage Manager hides off-stage windows: whether it fades them, moves them to a private space (it imports `CGSSpaceCreate` and `SLSTransactionSetSpaceAlpha`/`Transform`), or both.
+- **Do parked windows keep producing live ScreenCaptureKit frames?** (Task 10's early risk; not yet run.) Podium parks a window by moving all but a 1x1 pt corner off screen. Whether `SCStream` with `SCContentFilter(desktopIndependentWindow:)` still delivers new frames for such a window decides whether the strip can show live thumbnails of off-stage windows.
+
+  How to answer it (needs Screen Recording and Accessibility granted to `build/Podium.app`; the first run may only show the Screen Recording prompt, so grant it and run again):
+
+  ```sh
+  open -a TextEdit && osascript -e 'tell application "TextEdit" to make new document'
+  PODIUM_SIGN_IDENTITY=- scripts/build-app.sh
+  pkill -x Podium; open build/Podium.app --args --debug-capture-parked com.apple.TextEdit
+  # Within the 30 s window, type into the parked document:
+  for i in $(seq 1 20); do osascript -e 'tell application "TextEdit" to set text of front document to (text of front document) & "podium "'; sleep 1; done
+  log show --last 2m --style compact --predicate 'process == "Podium"' | grep 'debug capture'
+  ```
+
+  Reading the log: `on-stage snapshot ... ok` shows capture works at all. Then each `frame N t=... dt=... content=changed|same|first` line is one new frame; ScreenCaptureKit only sends a frame when the window's content changes, so with the typing loop running, steady lines about 1 s apart with `content=changed` mean **yes, parked windows stream live**. Only a `first` frame (or none) while the loop types means **no**. The run ends with `done; frames=N distinct=M changes=K; unpark ok`: K close to the number of edits is yes, K = 0 is no.
+
+  Decision either way (no code rewrite needed): if yes, keep `Capture.liveCapturesParkedWindows = true` (the default). If no, set it to false (`await capture.setLiveCapturesParkedWindows(false)`); the strip then shows the last snapshot taken while the window was on stage, which the Coordinator refreshes once per second for every on-stage window.

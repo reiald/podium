@@ -18,6 +18,8 @@ final class Coordinator {
     private let backend: AXWindowBackend
     private let mover: WindowMover
     private let ledger: ParkingLedger
+    private let capture: Capture
+    private var snapshotTimer: Timer?
     private var observer: WindowObserver?
     private var notificationTokens: [(NotificationCenter, NSObjectProtocol)] = []
 
@@ -32,10 +34,11 @@ final class Coordinator {
     private var applying = false
     private var pending: [WindowEvent] = []
 
-    init(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger) {
+    init(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger, capture: Capture) {
         self.backend = backend
         self.mover = mover
         self.ledger = ledger
+        self.capture = capture
         self.board = StageBoard(displayID: Screens.all.first?.id ?? 0)
     }
 
@@ -54,12 +57,18 @@ final class Coordinator {
         observe(NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification) { [weak self] in
             self?.reseed()
         }
+        // Keeps on-stage snapshots at most ~1 s old, so a transition never waits on a capture.
+        snapshotTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshSnapshots() }
+        }
     }
 
     /// Stops managing windows and puts every parked window back.
     func restoreAll() {
         observer?.stop()
         observer = nil
+        snapshotTimer?.invalidate()
+        snapshotTimer = nil
         for (center, token) in notificationTokens { center.removeObserver(token) }
         notificationTokens = []
         mover.restoreAll()
@@ -102,6 +111,8 @@ final class Coordinator {
         case let .closed(w):
             board.windowClosed(w)
             mover.forget(w)
+            let capture = self.capture
+            Task { await capture.forget(w) }
         case let .focused(w):
             // Parked windows count: Cmd-`, the Window menu, the Dock and Mission Control
             // focus them, and that must bring their stage forward.
@@ -146,6 +157,19 @@ final class Coordinator {
 
     private func isOnBoard(_ w: WindowRef) -> Bool {
         board.stages.contains { $0.windows.contains(w) }
+    }
+
+    // MARK: - Snapshots
+
+    /// Re-captures the active stage's on-screen windows in the background. Call it right
+    /// before a transition starts too; it never blocks the caller.
+    func refreshSnapshots() {
+        let windows = (board.activeStage?.windows ?? []).filter { w in
+            !mover.isParked(w) && !isInFlight(w) && !backend.isMinimized(w)
+        }
+        guard !windows.isEmpty else { return }
+        let capture = self.capture
+        Task { await capture.refreshOnStage(windows) }
     }
 
     // MARK: - Applying the model
