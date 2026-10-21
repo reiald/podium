@@ -271,3 +271,13 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     b.appActivated(pid: 1)
     #expect(b.activeStage?.windows == [w(1, 11)])
 }
+
+@Test func isMinimizedTracksDockRoundTrip() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    #expect(!b.isMinimized(w(1, 10)))
+    b.minimize(w(1, 10))
+    #expect(b.isMinimized(w(1, 10)))
+    b.deminimize(w(1, 10))
+    #expect(!b.isMinimized(w(1, 10)))
+}

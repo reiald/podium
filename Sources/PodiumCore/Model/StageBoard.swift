@@ -40,6 +40,11 @@ public struct StageBoard: Equatable, Sendable {
         self.displayID = displayID
     }
 
+    /// Whether `w` was sent to the Dock and not yet brought back.
+    public func isMinimized(_ w: WindowRef) -> Bool {
+        minimized.contains(w)
+    }
+
     public var activeStage: Stage? {
         activeStageID.flatMap(stage(_:))
     }

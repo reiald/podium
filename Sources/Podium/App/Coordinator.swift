@@ -20,6 +20,9 @@ final class Coordinator {
     private let ledger: ParkingLedger
     private let capture: Capture
     private var snapshotTimer: Timer?
+    private var snapshotTick = 0
+    /// Non-focused on-stage windows are refreshed every this many ticks (1 s each).
+    private static let backgroundSnapshotEvery = 4
     private var observer: WindowObserver?
     private var notificationTokens: [(NotificationCenter, NSObjectProtocol)] = []
 
@@ -56,19 +59,26 @@ final class Coordinator {
         }
         observe(NSWorkspace.shared.notificationCenter, NSWorkspace.didWakeNotification) { [weak self] in
             self?.reseed()
+            self?.startSnapshotTimer()
         }
-        // Keeps on-stage snapshots at most ~1 s old, so a transition never waits on a capture.
-        snapshotTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshSnapshots() }
+        observe(NSWorkspace.shared.notificationCenter, NSWorkspace.screensDidSleepNotification) { [weak self] in
+            self?.stopSnapshotTimer()
         }
+        observe(NSWorkspace.shared.notificationCenter, NSWorkspace.screensDidWakeNotification) { [weak self] in
+            self?.startSnapshotTimer()
+        }
+        if !CGPreflightScreenCaptureAccess() {
+            // Shows the system prompt once; capture starts working after a relaunch.
+            CGRequestScreenCaptureAccess()
+        }
+        startSnapshotTimer()
     }
 
     /// Stops managing windows and puts every parked window back.
     func restoreAll() {
         observer?.stop()
         observer = nil
-        snapshotTimer?.invalidate()
-        snapshotTimer = nil
+        stopSnapshotTimer()
         for (center, token) in notificationTokens { center.removeObserver(token) }
         notificationTokens = []
         mover.restoreAll()
@@ -142,6 +152,8 @@ final class Coordinator {
             }
         case let .appTerminated(pid):
             board.appTerminated(pid: pid)
+            let capture = self.capture
+            Task { await capture.forgetApp(pid: pid) }
             for e in ledger.entries() where e.window.pid == pid { mover.forget(e.window) }
         }
         apply(from: old, alreadyOffScreen: minimized.map { [$0] } ?? [])
@@ -161,11 +173,34 @@ final class Coordinator {
 
     // MARK: - Snapshots
 
-    /// Re-captures the active stage's on-screen windows in the background. Call it right
-    /// before a transition starts too; it never blocks the caller.
-    func refreshSnapshots() {
-        let windows = (board.activeStage?.windows ?? []).filter { w in
-            !mover.isParked(w) && !isInFlight(w) && !backend.isMinimized(w)
+    /// Keeps on-stage snapshots fresh so a transition never waits on a capture: the focused
+    /// window every second, the rest every few seconds. Stopped while displays sleep.
+    private func startSnapshotTimer() {
+        guard snapshotTimer == nil else { return }
+        snapshotTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.snapshotTimerFired() }
+        }
+    }
+
+    private func stopSnapshotTimer() {
+        snapshotTimer?.invalidate()
+        snapshotTimer = nil
+    }
+
+    private func snapshotTimerFired() {
+        // Without Screen Recording every capture would fail; skip until it's granted.
+        guard CGPreflightScreenCaptureAccess() else { return }
+        snapshotTick += 1
+        refreshSnapshots(all: snapshotTick % Self.backgroundSnapshotEvery == 0)
+    }
+
+    /// Re-captures the active stage's on-screen windows (only its front window unless `all`)
+    /// in the background. Call it with `all: true` right before a transition starts too; it
+    /// never blocks the caller.
+    func refreshSnapshots(all: Bool = true) {
+        let active = board.activeStage?.windows ?? []
+        let windows = (all ? active : Array(active.prefix(1))).filter { w in
+            !mover.isParked(w) && !isInFlight(w) && !board.isMinimized(w)
         }
         guard !windows.isEmpty else { return }
         let capture = self.capture

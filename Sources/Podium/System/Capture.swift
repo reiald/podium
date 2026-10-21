@@ -46,6 +46,10 @@ actor Capture {
     private let isParked: @MainActor @Sendable (WindowRef) -> Bool
     private var snapshots: [WindowRef: CGImage] = [:]
     private var refreshing: Set<WindowRef> = []
+    /// Snapshots running per window, and windows forgotten while one was running: such a
+    /// capture must not put the window back in the cache. Both only hold in-flight work.
+    private var capturing: [WindowRef: Int] = [:]
+    private var forgottenWhileCapturing: Set<WindowRef> = []
     private var live: [LiveHandle: LiveSession] = [:]
     private var loggedFailures: Set<WindowRef> = []
     private var loggedPermission = false
@@ -65,9 +69,18 @@ actor Capture {
 
     // MARK: - Snapshots
 
-    /// Captures `w` at `pointSize` (in points; scaled to the window's backing pixels) and
-    /// caches the result.
+    /// Captures `w` at `pointSize` (in points; scaled to the window's backing pixels).
+    /// The result is cached only if the window is still on stage and wasn't forgotten
+    /// meanwhile, so the cache never holds an off-screen frame.
     func snapshot(_ w: WindowRef, pointSize: CGSize) async throws -> CGImage {
+        capturing[w, default: 0] += 1
+        defer {
+            capturing[w, default: 1] -= 1
+            if capturing[w] == 0 {
+                capturing[w] = nil
+                forgottenWhileCapturing.remove(w)
+            }
+        }
         do {
             let window = try await shareableWindow(w)
             let filter = SCContentFilter(desktopIndependentWindow: window)
@@ -78,8 +91,11 @@ actor Capture {
             config.showsCursor = false
             config.ignoreShadowsSingleWindow = true
             let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            snapshots[w] = image
             loggedFailures.remove(w)
+            // Checked after the await too: `forget` may run while `isParked` is asked.
+            if !forgottenWhileCapturing.contains(w), !(await isParked(w)), !forgottenWhileCapturing.contains(w) {
+                snapshots[w] = image
+            }
             return image
         } catch {
             logFailure(w, "snapshot", error)
@@ -99,9 +115,16 @@ actor Capture {
         refreshing.formUnion(todo)
         defer { refreshing.subtract(todo) }
         for w in todo {
-            guard let size = try? await shareableWindow(w).frame.size, size.width > 0, size.height > 0 else {
+            // Parked since the caller checked: capturing now would cache an off-screen frame.
+            guard !(await isParked(w)) else { continue }
+            let size: CGSize
+            do {
+                size = try await shareableWindow(w).frame.size
+            } catch {
+                logFailure(w, "snapshot", error)
                 continue
             }
+            guard size.width > 0, size.height > 0 else { continue }
             _ = try? await snapshot(w, pointSize: size)
         }
     }
@@ -110,6 +133,13 @@ actor Capture {
     func forget(_ w: WindowRef) {
         snapshots[w] = nil
         loggedFailures.remove(w)
+        if capturing[w] != nil { forgottenWhileCapturing.insert(w) }
+    }
+
+    /// Drops every cached snapshot of a terminated app.
+    func forgetApp(pid: Int32) {
+        let windows = Set(snapshots.keys).union(capturing.keys).union(loggedFailures).filter { $0.pid == pid }
+        for w in windows { forget(w) }
     }
 
     // MARK: - Live thumbnails
