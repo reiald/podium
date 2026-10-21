@@ -6,7 +6,8 @@ import PodiumCore
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let backend = AXWindowBackend()
-    private lazy var mover = WindowMover(backend: backend, ledger: ParkingLedger(fileURL: Self.ledgerURL))
+    private lazy var ledger = ParkingLedger(fileURL: Self.ledgerURL)
+    private lazy var mover = WindowMover(backend: backend, ledger: ledger)
     private var signalSources: [DispatchSourceSignal] = []
     private var trustTimer: Timer?
     private var coordinator: Coordinator?
@@ -45,7 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.debugPark(bundleID: bundleID) }
             return
         }
-        let coordinator = Coordinator(backend: backend, mover: mover)
+        let coordinator = Coordinator(backend: backend, mover: mover, ledger: ledger)
         self.coordinator = coordinator
         coordinator.start()
     }

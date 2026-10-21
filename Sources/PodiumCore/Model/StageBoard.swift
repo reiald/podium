@@ -17,7 +17,9 @@ public struct Stage: Identifiable, Equatable, Sendable {
 /// - `windowClosed` / `appTerminated`: remove the windows; delete stages that become empty;
 ///   if the active stage was deleted, `activeStageID = nil` (empty stage = desktop).
 /// - `minimize(w)`: move `w` to a new non-active stage at the front of the strip; if the
-///   active stage becomes empty, `activeStageID = nil`.
+///   active stage becomes empty, `activeStageID = nil`. `w` stays marked minimized until it
+///   is focused or `deminimize(w)` is called; `appActivated` and `windowOpened` never pick a
+///   minimized window as the app's most recent one.
 /// - Activating a stage makes it the most recently used.
 ///
 /// Calls naming a window or stage that is not on the board are no-ops.
@@ -31,6 +33,8 @@ public struct StageBoard: Equatable, Sendable {
     /// Monotonic focus counter value per window (higher = more recently focused).
     private var focusTick: [WindowRef: Int] = [:]
     private var clock = 0
+    /// Windows sent to the Dock and not yet brought back.
+    private var minimized: Set<WindowRef> = []
 
     public init(displayID: UInt32) {
         self.displayID = displayID
@@ -69,12 +73,19 @@ public struct StageBoard: Equatable, Sendable {
     /// Records `w` as most recently focused and activates its stage.
     public mutating func windowFocused(_ w: WindowRef) {
         guard let i = stageIndex(of: w) else { return }
+        minimized.remove(w)
         touch(w)
         sortWindows(inStageAt: i)
         activate(stageID: stages[i].id)
     }
 
-    /// Activates the stage holding the app's most recently focused window.
+    /// The window came back from the Dock: unmarks it and treats it as focused.
+    public mutating func deminimize(_ w: WindowRef) {
+        windowFocused(w)
+    }
+
+    /// Activates the stage holding the app's most recently focused non-minimized window;
+    /// no-op if the app has none.
     public mutating func appActivated(pid: Int32) {
         guard let i = stageOfMostRecentWindow(pid: pid) else { return }
         activate(stageID: stages[i].id)
@@ -137,6 +148,7 @@ public struct StageBoard: Equatable, Sendable {
 
     public mutating func minimize(_ w: WindowRef) {
         guard let from = stageIndex(of: w) else { return }
+        minimized.insert(w)
         if stages[from].windows.count == 1 {
             // Already alone: just push its stage to the front of the strip.
             let id = stages[from].id
@@ -157,10 +169,10 @@ public struct StageBoard: Equatable, Sendable {
     private func stage(_ id: UUID) -> Stage? { stages.first { $0.id == id } }
     private func stageIndex(of w: WindowRef) -> Int? { stages.firstIndex { $0.windows.contains(w) } }
 
-    /// Index of the stage holding the app's most recently focused window.
+    /// Index of the stage holding the app's most recently focused non-minimized window.
     private func stageOfMostRecentWindow(pid: Int32) -> Int? {
         let best = stages.flatMap { $0.windows }
-            .filter { $0.pid == pid }
+            .filter { $0.pid == pid && !minimized.contains($0) }
             .max { (focusTick[$0] ?? 0) < (focusTick[$1] ?? 0) }
         return best.flatMap(stageIndex(of:))
     }
@@ -203,7 +215,10 @@ public struct StageBoard: Equatable, Sendable {
         for i in stages.indices.reversed() {
             stages[i].windows.removeAll { w in
                 let hit = predicate(w)
-                if hit { focusTick[w] = nil }
+                if hit {
+                    focusTick[w] = nil
+                    minimized.remove(w)
+                }
                 return hit
             }
             if stages[i].windows.isEmpty { deleteStage(at: i) }

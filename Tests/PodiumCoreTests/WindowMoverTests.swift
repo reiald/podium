@@ -443,3 +443,22 @@ private let visibleAboveDock = CGRect(x: 0, y: 0, width: 1000, height: 760)
         #expect(backend.frames[a] == CGRect(x: 600, y: 100, width: 400, height: 300))
     }
 }
+
+@Test func forgetDropsLedgerEntryWithoutMovingTheWindow() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA, b: frameB]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+        #expect(mover.park(b, display: display, displayID: 1))
+        backend.frames[a] = nil   // the window closed
+        let movesBefore = backend.moves.count
+
+        mover.forget(a)
+        #expect(ledger.entries().map(\.window) == [b])
+        #expect(!mover.isParked(a))
+        #expect(backend.moves.count == movesBefore)
+        mover.forget(a)           // forgetting an unknown window is a no-op
+        #expect(ledger.entries().map(\.window) == [b])
+    }
+}

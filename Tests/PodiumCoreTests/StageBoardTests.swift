@@ -225,3 +225,49 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     #expect(Set(b.activeStage!.windows) == [w(1, 11), w(1, 12)])
     #expect(b.stages.first { $0.id == s1 }?.windows == [w(1, 10)])
 }
+
+@Test func appActivationSkipsMinimizedOnlyStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))        // Notes A
+    b.windowOpened(w(1, 11))        // Notes B
+    b.windowFocused(w(1, 10))       // A is Notes' most recent window...
+    b.minimize(w(1, 10))            // ...then goes to the Dock, alone in its own stage
+    b.windowOpened(w(2, 20))        // another app comes forward
+    b.appActivated(pid: 1)          // Cmd-Tab back to Notes
+    #expect(b.activeStage?.windows == [w(1, 11)])
+}
+
+@Test func appActivationWithOnlyMinimizedWindowsIsNoOp() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.minimize(w(1, 10))
+    b.windowOpened(w(2, 20))
+    let active = b.activeStageID
+    b.appActivated(pid: 1)
+    #expect(b.activeStageID == active)
+}
+
+@Test func deminimizeBringsWindowsStageForward() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.minimize(w(1, 11))
+    b.windowOpened(w(2, 20))
+    b.deminimize(w(1, 11))
+    #expect(b.activeStage?.windows == [w(1, 11)])
+    // No longer minimized: the app's activation maps to it again.
+    b.windowOpened(w(3, 30))
+    b.appActivated(pid: 1)
+    #expect(b.activeStage?.windows == [w(1, 11)])
+}
+
+@Test func focusingMinimizedWindowUnmarksIt() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.minimize(w(1, 11))
+    b.windowFocused(w(1, 11))
+    b.windowOpened(w(2, 20))
+    b.appActivated(pid: 1)
+    #expect(b.activeStage?.windows == [w(1, 11)])
+}

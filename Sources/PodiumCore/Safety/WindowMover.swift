@@ -80,6 +80,15 @@ public final class WindowMover {
 
     public func isParked(_ w: WindowRef) -> Bool { entry(for: w) != nil }
 
+    /// Drops `w` from the ledger without touching the window (it closed, or its app quit).
+    public func forget(_ w: WindowRef) {
+        do {
+            try ledger.remove(w)
+        } catch {
+            log.error("Could not remove \(String(describing: w)) from ledger: \(String(describing: error))")
+        }
+    }
+
     /// Unparks every window in the ledger; windows that no longer exist are forgotten.
     /// Every entry gets an unpark attempt first, so a window missing from `liveWindows`
     /// by mistake is still put back rather than forgotten.
@@ -163,13 +172,5 @@ public final class WindowMover {
         _ = backend.setOrigin(target.origin, of: w)
         guard let back = backend.frame(of: w) else { return false }
         return abs(back.minX - target.minX) <= 1 && abs(back.minY - target.minY) <= 1
-    }
-
-    private func forget(_ w: WindowRef) {
-        do {
-            try ledger.remove(w)
-        } catch {
-            log.error("Could not remove \(String(describing: w)) from ledger: \(String(describing: error))")
-        }
     }
 }

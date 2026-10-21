@@ -22,6 +22,14 @@ enum AX {
         return list
     }
 
+    /// The app's focused window, if it has one.
+    static func focusedWindow(of pid: pid_t) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(application(pid), kAXFocusedWindowAttribute as CFString, &value) == .success,
+              let v = value, CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
+        return (v as! AXUIElement)
+    }
+
     static func windowID(of window: AXUIElement) -> CGWindowID? {
         var id: CGWindowID = 0
         return _AXUIElementGetWindow(window, &id) == .success && id != 0 ? id : nil

@@ -17,21 +17,25 @@ final class Coordinator {
 
     private let backend: AXWindowBackend
     private let mover: WindowMover
+    private let ledger: ParkingLedger
     private var observer: WindowObserver?
     private var notificationTokens: [(NotificationCenter, NSObjectProtocol)] = []
 
-    /// Windows Podium is moving right now, until `inFlightWindow` after the move. Moving a
-    /// window can make its app report focus changes that must not switch stages.
+    /// Windows Podium moved, until `inFlightWindow` after the batch that moved them ended.
+    /// Moving a window can make its app report focus changes that must not switch stages;
+    /// stamping at batch end means slow AX calls can't let those through.
     private var inFlight: [WindowRef: Date] = [:]
+    private var batchTouched: Set<WindowRef> = []
     private static let inFlightWindow: TimeInterval = 0.5
 
     /// Events that arrive while a change is being applied wait their turn.
     private var applying = false
     private var pending: [WindowEvent] = []
 
-    init(backend: AXWindowBackend, mover: WindowMover) {
+    init(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger) {
         self.backend = backend
         self.mover = mover
+        self.ledger = ledger
         self.board = StageBoard(displayID: Screens.all.first?.id ?? 0)
     }
 
@@ -97,8 +101,11 @@ final class Coordinator {
             board.windowOpened(w)
         case let .closed(w):
             board.windowClosed(w)
+            mover.forget(w)
         case let .focused(w):
-            guard !isInFlight(w), !mover.isParked(w) else { return }
+            // Parked windows count: Cmd-`, the Window menu, the Dock and Mission Control
+            // focus them, and that must bring their stage forward.
+            guard !isInFlight(w) else { return }
             if !isOnBoard(w) {
                 // A window we never saw open (e.g. on another Space at launch).
                 guard shouldManage(w) else { return }
@@ -109,13 +116,28 @@ final class Coordinator {
             // The Dock already took it off screen; never park it. Minimize-to-strip is Task 13.
             minimized = w
             board.minimize(w)
+        case let .deminimized(w):
+            board.deminimize(w)
         case let .appActivated(pid):
             guard pid != getpid() else { return }
-            board.appActivated(pid: pid)
+            // Prefer the window the app actually focused; fall back to its most recent one.
+            // A window Podium just moved doesn't count: after `select`, the app can still
+            // report the window that was just parked.
+            if let focused = focusedWindow(of: pid), isOnBoard(focused), !isInFlight(focused),
+               !backend.isMinimized(focused) {
+                board.windowFocused(focused)
+            } else {
+                board.appActivated(pid: pid)
+            }
         case let .appTerminated(pid):
             board.appTerminated(pid: pid)
+            for e in ledger.entries() where e.window.pid == pid { mover.forget(e.window) }
         }
         apply(from: old, alreadyOffScreen: minimized.map { [$0] } ?? [])
+    }
+
+    private func focusedWindow(of pid: pid_t) -> WindowRef? {
+        AX.focusedWindow(of: pid).flatMap(AX.windowID(of:)).map { WindowRef(pid: pid, windowID: $0) }
     }
 
     private func shouldManage(_ w: WindowRef) -> Bool {
@@ -142,12 +164,13 @@ final class Coordinator {
         if old.activeStageID != board.activeStageID, let front = newActive.first {
             backend.raise(front)
         }
+        endBatch()
     }
 
     /// Unparks; a window that fails stays in the ledger (restoreAll / recovery still own it).
     private func show(_ windows: [WindowRef]) {
         for w in windows {
-            markInFlight(w)
+            batchTouched.insert(w)
             if !mover.unpark(w) { NSLog("Podium: could not unpark %u (pid %d)", w.windowID, w.pid) }
         }
     }
@@ -160,7 +183,7 @@ final class Coordinator {
                 continue
             }
             let screen = Screens.containing(frame)
-            markInFlight(w)
+            batchTouched.insert(w)
             if !mover.park(w, display: screen.frame, displayID: screen.id) {
                 NSLog("Podium: could not park %u (pid %d); leaving it on screen", w.windowID, w.pid)
             }
@@ -173,10 +196,14 @@ final class Coordinator {
         show(board.stages.flatMap(\.windows).filter { active.contains($0) && mover.isParked($0) })
         hide(board.stages.flatMap(\.windows).filter { !active.contains($0) })
         if let front = board.activeStage?.windows.first { backend.raise(front) }
+        endBatch()
     }
 
-    private func markInFlight(_ w: WindowRef) {
-        inFlight[w] = Date().addingTimeInterval(Self.inFlightWindow)
+    /// Stamps every window the batch touched, counting from now (the batch's end).
+    private func endBatch() {
+        let until = Date().addingTimeInterval(Self.inFlightWindow)
+        for w in batchTouched { inFlight[w] = until }
+        batchTouched = []
     }
 
     private func isInFlight(_ w: WindowRef) -> Bool {
@@ -204,6 +231,7 @@ final class Coordinator {
         // An empty answer means the query failed; forget nothing.
         if !live.isEmpty {
             for w in board.stages.flatMap(\.windows) where !live.contains(w) { board.windowClosed(w) }
+            for e in ledger.entries() where !live.contains(e.window) { mover.forget(e.window) }
         }
         let activeBefore = board.activeStageID
         for w in onScreenWindowsBackToFront() where !isOnBoard(w) { board.windowOpened(w) }
@@ -218,7 +246,10 @@ final class Coordinator {
 
     private func screensChanged() {
         guard let main = Screens.all.first else { return }
+        // Repark moves every parked window (and unparks those it can't keep parked).
+        batchTouched.formUnion(ledger.entries().map(\.window))
         mover.repark(display: main.frame)
+        endBatch()
     }
 
     /// Manageable windows of regular apps, in on-screen z-order from back to front.

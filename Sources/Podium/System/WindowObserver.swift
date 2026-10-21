@@ -8,6 +8,7 @@ enum WindowEvent {
     case closed(WindowRef)
     case focused(WindowRef)
     case minimized(WindowRef)
+    case deminimized(WindowRef)
     case appActivated(Int32)
     case appTerminated(Int32)
 }
@@ -37,7 +38,9 @@ final class WindowObserver {
     }
 
     private static let appNotifications = [kAXWindowCreatedNotification, kAXFocusedWindowChangedNotification]
-    private static let windowNotifications = [kAXUIElementDestroyedNotification, kAXWindowMiniaturizedNotification]
+    private static let windowNotifications = [
+        kAXUIElementDestroyedNotification, kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification,
+    ]
     private static let attachRetries = 10
     private static let attachRetryDelay: TimeInterval = 0.5
 
@@ -99,7 +102,11 @@ final class WindowObserver {
         var attached = false
         for name in Self.appNotifications {
             let err = AXObserverAddNotification(observer, app, name as CFString, refcon)
-            if err == .success || err == .notificationAlreadyRegistered { attached = true }
+            if err == .success || err == .notificationAlreadyRegistered {
+                attached = true
+            } else if retriesLeft == 0 {
+                NSLog("Podium: observing %@ for pid %d failed: %d", name, pid, err.rawValue)
+            }
         }
         guard attached else {
             if retriesLeft > 0 {
@@ -160,6 +167,8 @@ final class WindowObserver {
             onEvent(.closed(ref))
         case kAXWindowMiniaturizedNotification:
             if let ref = ref(for: element, pid: pid) { onEvent(.minimized(ref)) }
+        case kAXWindowDeminiaturizedNotification:
+            if let ref = ref(for: element, pid: pid) { onEvent(.deminimized(ref)) }
         default:
             break
         }
@@ -177,7 +186,10 @@ final class WindowObserver {
         guard let o = apps[pid], !o.windows.contains(where: { $0.ref == ref }) else { return }
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         for name in Self.windowNotifications {
-            AXObserverAddNotification(o.observer, element, name as CFString, refcon)
+            let err = AXObserverAddNotification(o.observer, element, name as CFString, refcon)
+            if err != .success && err != .notificationAlreadyRegistered {
+                NSLog("Podium: observing %@ on window %u (pid %d) failed: %d", name, ref.windowID, pid, err.rawValue)
+            }
         }
         o.windows.append((element, ref))
     }
