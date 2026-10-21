@@ -39,6 +39,8 @@ final class Coordinator {
     private static let unminimizeTimeout: TimeInterval = 0.5
     /// How long after the fallback started its window's events are still ignored.
     private static let unminimizeQuiet: TimeInterval = 1.5
+    /// Minimizes this soon after an Option-click or Option-Cmd-M are left in the Dock.
+    private static let minimizeAllQuiet: TimeInterval = 2
     /// Set by `restoreAll`; a start still waiting on launch snapshots then does nothing.
     private var stopped = false
     /// How long launch waits for snapshots of every window before parking (strip cards).
@@ -334,7 +336,9 @@ final class Coordinator {
             }
             board.windowFocused(w)
         case let .minimized(w):
-            if dockFallback.remove(w) == nil, minimizeBehavior == .strip, canMinimizeToStrip(w) {
+            // Minimize all (Option-click, Option-Cmd-M) goes to the Dock as in stock macOS.
+            if dockFallback.remove(w) == nil, minimizeBehavior == .strip, canMinimizeToStrip(w),
+               interceptor?.minimizeAllGesture(within: Self.minimizeAllQuiet) != true {
                 // Not intercepted (Window menu, custom title bar): bring it back, then park it.
                 guard !isUnminimizing(w) else { return }
                 unminimizeIntoStrip(w)

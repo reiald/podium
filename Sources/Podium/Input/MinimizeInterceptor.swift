@@ -27,6 +27,8 @@ final class MinimizeInterceptor {
     /// The last Cmd-M was swallowed; its key repeats are swallowed too.
     private var swallowedKeyDown = false
     private let systemWide: AXUIElement
+    /// When the last Option-click or Option-Cmd-M (minimize all, passed to macOS) happened.
+    private var lastMinimizeAllGesture: CFTimeInterval = -.infinity
 
     /// Upper bound on an AX call made inside the callback.
     static let hitTestTimeout: Float = 0.05
@@ -82,6 +84,13 @@ final class MinimizeInterceptor {
         source = nil
         swallowedMouseDown = false
         swallowedKeyDown = false
+    }
+
+    /// Whether an Option-click or Option-Cmd-M happened in the last `seconds`. Such a
+    /// gesture may be macOS's "minimize all", whose minimizes must stay in the Dock. Recorded
+    /// without any AX work, so any Option-click counts; erring toward the Dock is safe.
+    func minimizeAllGesture(within seconds: CFTimeInterval) -> Bool {
+        CACurrentMediaTime() - lastMinimizeAllGesture < seconds
     }
 
     // MARK: - Callback
@@ -142,6 +151,7 @@ final class MinimizeInterceptor {
         // A new press ends any earlier pair (its mouse-up may have been lost).
         swallowedMouseDown = false
         let modifiers = Self.modifiers(event.flags)
+        if modifiers == .option { lastMinimizeAllGesture = CACurrentMediaTime() }
         // Skip the hit-test when nothing could be intercepted anyway.
         guard decideMinimize(.mouseDown(subrole: "AXMinimizeButton", modifiers: modifiers), behavior: behavior(),
                              tapHealthy: tapHealthy, frontWindowManaged: true) == .intercept else { return .pass }
@@ -168,8 +178,9 @@ final class MinimizeInterceptor {
             return swallowedKeyDown && keyCode == Self.mKeyCode ? .swallow : .pass
         }
         swallowedKeyDown = false
-        let trigger = MinimizeTrigger.keyDown(keyCode: UInt16(truncatingIfNeeded: keyCode),
-                                              modifiers: Self.modifiers(event.flags))
+        let modifiers = Self.modifiers(event.flags)
+        if keyCode == Self.mKeyCode, modifiers == [.command, .option] { lastMinimizeAllGesture = CACurrentMediaTime() }
+        let trigger = MinimizeTrigger.keyDown(keyCode: UInt16(truncatingIfNeeded: keyCode), modifiers: modifiers)
         guard decideMinimize(trigger, behavior: behavior(), tapHealthy: tapHealthy,
                              frontWindowManaged: true) == .intercept else { return .pass }
         guard let app = Self.element(kAXFocusedApplicationAttribute, of: systemWide) else { return .pass }
