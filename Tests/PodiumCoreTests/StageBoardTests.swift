@@ -281,3 +281,36 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     b.deminimize(w(1, 10))
     #expect(!b.isMinimized(w(1, 10)))
 }
+
+// Minimize to strip (Coordinator.minimizeToStrip) composes existing calls; the window is
+// parked, not minimized, so it must never be marked minimized.
+
+@Test func minimizeToStripFromSharedStageKeepsRestOnStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))                     // app 2 active; app 1 in the strip
+    b.addToActiveStage(w(1, 10))                 // stage: 20 and 10
+    let previous = b.activeStageID!
+    b.moveToOwnStage(w(2, 20))
+    b.activate(stageID: previous)
+    #expect(b.activeStageID == previous)
+    #expect(b.activeStage?.windows == [w(1, 10)])
+    #expect(b.stripStages.first?.windows == [w(2, 20)])
+    #expect(!b.isMinimized(w(2, 20)))
+}
+
+@Test func minimizeToStripOfAloneWindowLeavesDesktopAndFrontsItsStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.minimize(w(1, 10))                         // another stage pushed to the strip front
+    let previous = b.activeStageID!
+    b.activate(stageID: previous)
+    b.activate(stageID: nil)
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.first?.id == previous)
+    #expect(!b.isMinimized(w(2, 20)))
+    // Coming back from the strip is an ordinary activation.
+    b.appActivated(pid: 2)
+    #expect(b.activeStageID == previous)
+}

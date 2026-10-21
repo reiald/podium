@@ -55,6 +55,20 @@ The actual numbers are compiled into code and weren't read. They come from measu
 
 The Dock calls `setDockInfoWithDisplayID:currentInset:maximumInset:orientation:` on Stage Manager. That's the only input for side, and it's gated by entitlements.
 
+## 7. Which minimize path each app takes under Podium (to be filled in, Task 13 Step 3)
+
+Podium catches the yellow button (AX hit-test finds an `AXMinimizeButton`) and Cmd-M (key code 46, Command only) with an event tap. Anything it misses reaches the app, and if the window really minimizes, the fallback un-minimizes it (`AXMinimized` false) and parks it. Check `log stream --predicate 'process == "Podium"'`: the fallback logs nothing on success, so a visible Dock genie followed by the window coming back and flying into the strip means the fallback path; no genie means the tap path.
+
+| App | Yellow button | Cmd-M | Window → Minimize | Notes |
+|---|---|---|---|---|
+| TextEdit | _not yet run_ | _not yet run_ | _not yet run_ | |
+| Safari | _not yet run_ | _not yet run_ | _not yet run_ | |
+| Notes | _not yet run_ | _not yet run_ | _not yet run_ | |
+| Chrome | _not yet run_ | _not yet run_ | _not yet run_ | custom title bar: is the button still `AXMinimizeButton`? |
+| VS Code or Slack (Electron) | _not yet run_ | _not yet run_ | _not yet run_ | custom title bar; does Cmd-M map to minimize? |
+
+Each cell: "tap" (no genie), "fallback" (genie, then back and into the strip), or "Dock" (stays in the Dock: neither path worked).
+
 ## Still unknown
 
 - The exact spring response, damping and timing values.

@@ -15,11 +15,19 @@ enum AX {
         return app
     }
 
+    /// Gives `e` its own `messagingTimeout`. Elements without one use the global default,
+    /// which the minimize interceptor lowers to a few milliseconds for its hit-tests.
+    @discardableResult
+    static func bounded(_ e: AXUIElement) -> AXUIElement {
+        AXUIElementSetMessagingTimeout(e, messagingTimeout)
+        return e
+    }
+
     static func windows(of pid: pid_t) -> [AXUIElement] {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application(pid), kAXWindowsAttribute as CFString, &value) == .success,
               let list = value as? [AXUIElement] else { return [] }
-        return list
+        return list.map(bounded)
     }
 
     /// The app's focused window, if it has one.
@@ -27,7 +35,7 @@ enum AX {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application(pid), kAXFocusedWindowAttribute as CFString, &value) == .success,
               let v = value, CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
-        return (v as! AXUIElement)
+        return bounded(v as! AXUIElement)
     }
 
     static func windowID(of window: AXUIElement) -> CGWindowID? {
@@ -65,6 +73,11 @@ enum AX {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
         return value as? String
+    }
+
+    @discardableResult
+    static func setBool(_ attribute: String, _ value: Bool, of element: AXUIElement) -> Bool {
+        AXUIElementSetAttributeValue(element, attribute as CFString, value as CFBoolean) == .success
     }
 
     static func bool(_ attribute: String, of element: AXUIElement) -> Bool {

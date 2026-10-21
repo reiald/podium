@@ -151,6 +151,7 @@ final class WindowObserver {
     private func received(_ name: String, element: AXUIElement) {
         var pid: pid_t = 0
         guard AXUIElementGetPid(element, &pid) == .success else { return }
+        AX.bounded(element)
         switch name {
         case kAXWindowCreatedNotification:
             windowAppeared(element, pid: pid)

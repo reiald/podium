@@ -70,6 +70,13 @@ final class AXWindowBackend: WindowBackend {
         element(for: w).map { AX.bool(kAXMinimizedAttribute, of: $0) } ?? false
     }
 
+    /// Sets AXMinimized; false brings a window back from the Dock.
+    @discardableResult
+    func setMinimized(_ minimized: Bool, of w: WindowRef) -> Bool {
+        guard let e = element(for: w) else { return false }
+        return AX.setBool(kAXMinimizedAttribute, minimized, of: e)
+    }
+
     /// Brings `w` to the front of its app's windows.
     @discardableResult
     func raise(_ w: WindowRef) -> Bool {

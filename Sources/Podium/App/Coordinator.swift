@@ -27,6 +27,18 @@ final class Coordinator {
     private var observer: WindowObserver?
     private var runner: TransitionRunner?
     private var presenter: StripPresenter?
+    private var interceptor: MinimizeInterceptor?
+    /// What the yellow button and Cmd-M do. Settings (Task 14) will own this.
+    var minimizeBehavior: MinimizeBehavior = .strip
+    /// Windows the minimize fallback is bringing back from the Dock, until the given time:
+    /// their own (de)minimize and focus noise must not move stages meanwhile.
+    private var unminimizing: [WindowRef: Date] = [:]
+    /// Windows the fallback gave up on: their `.minimized` takes the Dock path.
+    private var dockFallback: Set<WindowRef> = []
+    private static let unminimizePoll: TimeInterval = 0.02
+    private static let unminimizeTimeout: TimeInterval = 0.5
+    /// How long after the fallback started its window's events are still ignored.
+    private static let unminimizeQuiet: TimeInterval = 1.5
     /// Set by `restoreAll`; a start still waiting on launch snapshots then does nothing.
     private var stopped = false
     /// How long launch waits for snapshots of every window before parking (strip cards).
@@ -96,6 +108,12 @@ final class Coordinator {
         self.observer = observer
         observer.start()
 
+        let interceptor = MinimizeInterceptor(behavior: { [weak self] in self?.minimizeBehavior ?? .dock },
+                                              isManaged: { [weak self] in self?.canMinimizeToStrip($0) ?? false },
+                                              onIntercept: { [weak self] in self?.minimizeToStrip($0) })
+        self.interceptor = interceptor
+        interceptor.start()
+
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { [weak self] in
             self?.screensChanged()
         }
@@ -119,6 +137,8 @@ final class Coordinator {
     /// Stops managing windows and puts every parked window back.
     func restoreAll() {
         stopped = true
+        interceptor?.stop()
+        interceptor = nil
         observer?.stop()
         observer = nil
         presenter?.stop()
@@ -191,6 +211,79 @@ final class Coordinator {
         apply(from: old)
     }
 
+    /// Whether a minimize of `w` can go to the strip: an on-screen window of the active stage.
+    private func canMinimizeToStrip(_ w: WindowRef) -> Bool {
+        isRunning && board.activeStage?.windows.contains(w) == true && !mover.isParked(w) && !board.isMinimized(w)
+    }
+
+    /// Minimize to strip: the window is parked, not minimized. It gets its own stage at the
+    /// front of the strip and flies there; the rest of its stage stays on screen, and if it
+    /// was alone the stage area is left empty (desktop).
+    func minimizeToStrip(_ w: WindowRef) {
+        guard !applying, canMinimizeToStrip(w), let previous = board.activeStageID,
+              let count = board.activeStage?.windows.count else {
+            NSLog("Podium: minimize to strip of %u (pid %d) no longer applies", w.windowID, w.pid)
+            return
+        }
+        let old = board
+        if count > 1 {
+            board.moveToOwnStage(w)
+            board.activate(stageID: previous)
+            if let front = board.activeStage?.windows.first { board.windowFocused(front) }
+        } else {
+            // Activating first puts the stage at the front of the most-recently-used order.
+            board.activate(stageID: previous)
+            board.activate(stageID: nil)
+        }
+        apply(from: old)
+        // The parked window must not keep keyboard focus: the stage's next window takes it.
+        if let front = board.activeStage?.windows.first, !mover.isParked(front) {
+            backend.raise(front)
+            if front.pid != w.pid, let app = NSRunningApplication(processIdentifier: front.pid), !app.isActive {
+                app.activate()
+            }
+        }
+    }
+
+    /// Fallback for minimizes the interceptor didn't see (Window menu, custom title bars, a
+    /// disabled tap): bring the window back from the Dock, then minimize it to the strip.
+    private func unminimizeIntoStrip(_ w: WindowRef) {
+        let started = Date()
+        unminimizing[w] = started.addingTimeInterval(Self.unminimizeQuiet)
+        guard backend.setMinimized(false, of: w) else {
+            NSLog("Podium: could not un-minimize %u (pid %d); leaving it in the Dock", w.windowID, w.pid)
+            dockInstead(w)
+            return
+        }
+        Timer.scheduledTimer(withTimeInterval: Self.unminimizePoll, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard let self, !self.stopped else { return timer.invalidate() }
+                if !self.backend.isMinimized(w) {
+                    timer.invalidate()
+                    self.minimizeToStrip(w)
+                } else if Date().timeIntervalSince(started) > Self.unminimizeTimeout {
+                    timer.invalidate()
+                    NSLog("Podium: %u (pid %d) still minimized after %.1f s; leaving it in the Dock",
+                          w.windowID, w.pid, Self.unminimizeTimeout)
+                    self.dockInstead(w)
+                }
+            }
+        }
+    }
+
+    /// The fallback failed: handle the minimize the stock way (Task 9).
+    private func dockInstead(_ w: WindowRef) {
+        unminimizing[w] = nil
+        dockFallback.insert(w)
+        handle(.minimized(w))
+    }
+
+    private func isUnminimizing(_ w: WindowRef) -> Bool {
+        let now = Date()
+        unminimizing = unminimizing.filter { $0.value > now }
+        return unminimizing[w] != nil
+    }
+
     /// Debug menu: moves the strip to the other side; every card retargets live.
     func flipSide() {
         side = side == .right ? .left : .right
@@ -233,7 +326,7 @@ final class Coordinator {
         case let .focused(w):
             // Parked windows count: Cmd-`, the Window menu, the Dock and Mission Control
             // focus them, and that must bring their stage forward. Minimized ones don't.
-            guard !isInFlight(w), !backend.isMinimized(w) else { return }
+            guard !isInFlight(w), !isUnminimizing(w), !backend.isMinimized(w) else { return }
             if !isOnBoard(w) {
                 // A window we never saw open (e.g. on another Space at launch).
                 guard shouldManage(w) else { return }
@@ -241,10 +334,18 @@ final class Coordinator {
             }
             board.windowFocused(w)
         case let .minimized(w):
-            // The Dock already took it off screen; never park it. Minimize-to-strip is Task 13.
+            if dockFallback.remove(w) == nil, minimizeBehavior == .strip, canMinimizeToStrip(w) {
+                // Not intercepted (Window menu, custom title bar): bring it back, then park it.
+                guard !isUnminimizing(w) else { return }
+                unminimizeIntoStrip(w)
+                return
+            }
+            // The Dock took it off screen; never park it.
             minimized = w
             board.minimize(w)
         case let .deminimized(w):
+            // The fallback un-minimizing it: it is about to go to the strip instead.
+            guard !isUnminimizing(w) else { return }
             board.deminimize(w)
         case let .appActivated(pid):
             guard pid != getpid() else { return }
