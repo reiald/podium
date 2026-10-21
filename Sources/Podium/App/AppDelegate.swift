@@ -90,6 +90,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let restore = NSMenuItem(title: "Restore All Windows", action: #selector(restoreAll), keyEquivalent: "")
         restore.target = self
         menu.addItem(restore)
+        if Self.debugMenuEnabled {
+            let flip = NSMenuItem(title: "Flip Side", action: #selector(flipSide), keyEquivalent: "")
+            flip.target = self
+            menu.addItem(flip)
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Podium", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
@@ -110,6 +115,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Debug
+
+    /// Debug builds always; release builds only with `--debug-menu`.
+    private static var debugMenuEnabled: Bool {
+        #if DEBUG
+        return true
+        #else
+        return CommandLine.arguments.contains("--debug-menu")
+        #endif
+    }
+
+    @objc private func flipSide() {
+        coordinator?.flipSide()
+    }
 
     private static func debugParkBundle() -> String? {
         debugArgument("--debug-park-bundle")

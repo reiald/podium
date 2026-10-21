@@ -37,17 +37,41 @@ final class Animator {
 
     private let logger = Logger(subsystem: "dev.podium.Podium", category: "animator")
     private var entries: [ObjectIdentifier: Entry] = [:]
-    private let link: CADisplayLink
+    /// Callbacks waiting for a number of display-link ticks (see `afterFrames`).
+    private var frameWaiters: [(remaining: Int, body: () -> Void)] = []
+    private var link: CADisplayLink
     private var lastTimestamp: CFTimeInterval?
     private(set) var stats = FrameStats()
 
     init(screen: NSScreen) {
         let target = LinkTarget()
-        link = screen.displayLink(target: target, selector: #selector(LinkTarget.tick(_:)))
+        link = Self.makeLink(screen: screen, target: target)
         target.animator = self
+    }
+
+    private static func makeLink(screen: NSScreen, target: LinkTarget) -> CADisplayLink {
+        let link = screen.displayLink(target: target, selector: #selector(LinkTarget.tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 80, maximum: 120, preferred: 120)
         link.isPaused = true
         link.add(to: .main, forMode: .common)
+        return link
+    }
+
+    /// Moves the display link to `screen` (after a display change), keeping every running
+    /// spring and frame waiter.
+    func rebind(to screen: NSScreen) {
+        let wasPaused = link.isPaused
+        link.invalidate()
+        let target = LinkTarget()
+        link = Self.makeLink(screen: screen, target: target)
+        target.animator = self
+        lastTimestamp = nil
+        link.isPaused = wasPaused
+    }
+
+    /// The screen whose display refreshes fastest; the one link should follow it.
+    static func fastestScreen() -> NSScreen? {
+        NSScreen.screens.max { $0.maximumFramesPerSecond < $1.maximumFramesPerSecond }
     }
 
     /// The run loop retains the link, and the link's proxy only holds the Animator weakly, so
@@ -70,6 +94,10 @@ final class Animator {
             vector.retarget(pose.vector())
             entries[key] = Entry(card: card, spring: spring, vector: vector)
         }
+        resume()
+    }
+
+    private func resume() {
         if link.isPaused {
             lastTimestamp = nil
             link.isPaused = false
@@ -83,6 +111,18 @@ final class Animator {
             return
         }
         entry.settled.append(body)
+    }
+
+    /// Runs `body` after `frames` display-link ticks (at least one), after that tick's poses
+    /// were written.
+    func afterFrames(_ frames: Int, _ body: @escaping () -> Void) {
+        frameWaiters.append((max(1, frames), body))
+        resume()
+    }
+
+    /// Stops `card`'s spring where it is; its settle callbacks never run.
+    func cancel(_ card: WindowCard) {
+        entries[ObjectIdentifier(card)] = nil
     }
 
     /// Whether `card` currently has a live spring.
@@ -122,7 +162,16 @@ final class Animator {
         }
         CATransaction.commit()
 
-        if entries.isEmpty {
+        var due: [() -> Void] = []
+        frameWaiters = frameWaiters.compactMap { waiter in
+            if waiter.remaining <= 1 {
+                due.append(waiter.body)
+                return nil
+            }
+            return (waiter.remaining - 1, waiter.body)
+        }
+
+        if entries.isEmpty && frameWaiters.isEmpty {
             link.isPaused = true
             lastTimestamp = nil
         }
@@ -130,6 +179,7 @@ final class Animator {
         for entry in finished {
             entry.settled.forEach { $0() }
         }
+        due.forEach { $0() }
     }
 }
 

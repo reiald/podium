@@ -7,13 +7,14 @@ import struct PodiumCore.WindowRef
 /// Owns the stage model and keeps the screen in sync with it: only the active stage's
 /// windows stay on screen, every other window is parked.
 ///
-/// After each model change the old and new active stage are diffed: windows that joined are
-/// unparked first, then windows that left are parked, so the screen never goes empty
-/// mid-switch. Moves are instant here; Task 12 animates them.
+/// After each model change the old and new board are diffed into a `TransitionPlan`, which
+/// the `TransitionRunner` plays as card animations (parking and unparking under the cards).
+/// The `StripPresenter` turns strip clicks, hover, auto-hide and drags into model changes.
 @MainActor
 final class Coordinator {
-    var side: StripSide = .right
+    private(set) var side: StripSide = .right
     private(set) var board: StageBoard
+    let tuning = Tuning.initial
 
     private let backend: AXWindowBackend
     private let mover: WindowMover
@@ -24,6 +25,12 @@ final class Coordinator {
     /// Non-focused on-stage windows are refreshed every this many ticks (1 s each).
     private static let backgroundSnapshotEvery = 4
     private var observer: WindowObserver?
+    private var runner: TransitionRunner?
+    private var presenter: StripPresenter?
+    /// Set by `restoreAll`; a start still waiting on launch snapshots then does nothing.
+    private var stopped = false
+    /// How long launch waits for snapshots of every window before parking (strip cards).
+    private static let launchSnapshotWait: TimeInterval = 1
     private var notificationTokens: [(NotificationCenter, NSObjectProtocol)] = []
 
     /// Windows Podium moved, until `inFlightWindow` after the batch that moved them ended.
@@ -48,8 +55,37 @@ final class Coordinator {
     // MARK: - Lifecycle
 
     func start() {
-        guard observer == nil else { return }
-        seed()
+        guard runner == nil else { return }
+        seedBoard()
+        let runner = TransitionRunner(backend: backend, mover: mover, ledger: ledger, capture: capture,
+                                      layout: layout, board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
+        runner.onBatchEnd = { [weak self] in self?.stamp($0) }
+        self.runner = runner
+        let presenter = StripPresenter(backend: backend, mover: mover, runner: runner,
+                                       board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
+        presenter.onSelect = { [weak self] in self?.select(stageID: $0) }
+        presenter.onShiftClick = { [weak self] in self?.addFrontWindowToActive(stageID: $0) }
+        presenter.onCombine = { [weak self] in self?.combineIntoActive(stageID: $0) }
+        presenter.onDragOut = { [weak self] in self?.dragOut($0) }
+        self.presenter = presenter
+        // Overlay (in the runner) and panel are shown now, not at the first transition.
+        presenter.start()
+
+        // Snapshot every window while it is still on screen, so parked stages get strip
+        // cards; never hold launch up for more than a moment.
+        let windows = board.stages.flatMap(\.windows)
+        let capture = self.capture
+        Task { @MainActor [weak self] in
+            if CGPreflightScreenCaptureAccess() {
+                await awaitAtMost(Self.launchSnapshotWait) { await capture.refreshOnStage(windows) }
+            }
+            self?.finishStart()
+        }
+    }
+
+    private func finishStart() {
+        guard !stopped else { return }
+        reconcile()
         let observer = WindowObserver { [weak self] in self?.handle($0) }
         self.observer = observer
         observer.start()
@@ -76,8 +112,13 @@ final class Coordinator {
 
     /// Stops managing windows and puts every parked window back.
     func restoreAll() {
+        stopped = true
         observer?.stop()
         observer = nil
+        presenter?.stop()
+        presenter = nil
+        runner?.shutdown()
+        runner = nil
         stopSnapshotTimer()
         for (center, token) in notificationTokens { center.removeObserver(token) }
         notificationTokens = []
@@ -99,6 +140,7 @@ final class Coordinator {
 
     /// Shows the stage (strip click).
     func select(stageID: UUID) {
+        guard isRunning, !applying else { return }
         let old = board
         board.activate(stageID: stageID)
         // Make its front window the app's most recent one, so the app activation that
@@ -111,6 +153,50 @@ final class Coordinator {
         }
     }
 
+    /// Shift-click: the stage's front window joins the active stage.
+    func addFrontWindowToActive(stageID: UUID) {
+        guard isRunning, !applying, let front = board.stages.first(where: { $0.id == stageID })?.windows.first else { return }
+        let old = board
+        board.addToActiveStage(front)
+        apply(from: old)
+    }
+
+    /// A strip thumbnail dragged onto the stage: its windows join the active stage.
+    func combineIntoActive(stageID: UUID) {
+        guard isRunning, !applying else { return }
+        let old = board
+        board.combineIntoActive(stageID: stageID)
+        apply(from: old)
+    }
+
+    /// A stage window's title bar dragged into the strip band: the window gets its own stage
+    /// (`moveToOwnStage`), and, as in Stage Manager, that stage goes to the strip while the
+    /// rest of the old stage stays on screen.
+    func dragOut(_ w: WindowRef) {
+        guard isRunning, !applying, let previous = board.activeStageID,
+              board.activeStage?.windows.contains(w) == true else { return }
+        let old = board
+        board.moveToOwnStage(w)
+        guard board != old else { return }
+        board.activate(stageID: previous)
+        if let front = board.activeStage?.windows.first { board.windowFocused(front) }
+        apply(from: old)
+    }
+
+    /// Debug menu: moves the strip to the other side; every card retargets live.
+    func flipSide() {
+        side = side == .right ? .left : .right
+        runner?.update(layout: layout)
+        presenter?.boardChanged()
+    }
+
+    /// Launch finished (windows parked, events observed) and not stopped.
+    private var isRunning: Bool { observer != nil }
+
+    private var layout: TransitionRunner.Layout {
+        (side: side, screen: Screens.all.first?.frame ?? .zero, tuning: tuning)
+    }
+
     private func process(_ e: WindowEvent) {
         let old = board
         var minimized: WindowRef?
@@ -119,14 +205,27 @@ final class Coordinator {
             guard isOnBoard(w) || shouldManage(w) else { return }
             board.windowOpened(w)
         case let .closed(w):
+            // A spurious destroyed notification must not strand a parked window: only a
+            // window the window server no longer lists is gone. It may lag the notification,
+            // so a window still listed is checked once more a moment later.
+            let live = backend.liveWindows()
+            if live.contains(w) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeRecheckDelay) { [weak self] in
+                    guard let self, !self.backend.liveWindows().contains(w) else { return }
+                    self.handle(.closed(w))
+                }
+                return
+            }
             board.windowClosed(w)
-            mover.forget(w)
+            runner?.forget(w)
+            // An empty answer means the query failed: keep the ledger entry.
+            if !live.isEmpty { mover.forget(w) }
             let capture = self.capture
             Task { await capture.forget(w) }
         case let .focused(w):
             // Parked windows count: Cmd-`, the Window menu, the Dock and Mission Control
-            // focus them, and that must bring their stage forward.
-            guard !isInFlight(w) else { return }
+            // focus them, and that must bring their stage forward. Minimized ones don't.
+            guard !isInFlight(w), !backend.isMinimized(w) else { return }
             if !isOnBoard(w) {
                 // A window we never saw open (e.g. on another Space at launch).
                 guard shouldManage(w) else { return }
@@ -158,6 +257,8 @@ final class Coordinator {
         }
         apply(from: old, alreadyOffScreen: minimized.map { [$0] } ?? [])
     }
+
+    private static let closeRecheckDelay: TimeInterval = 0.5
 
     private func focusedWindow(of pid: pid_t) -> WindowRef? {
         AX.focusedWindow(of: pid).flatMap(AX.windowID(of:)).map { WindowRef(pid: pid, windowID: $0) }
@@ -211,19 +312,25 @@ final class Coordinator {
 
     private func apply(from old: StageBoard, alreadyOffScreen: Set<WindowRef> = []) {
         guard board != old else { return }
-        let oldActive = old.activeStage?.windows ?? []
-        let newActive = board.activeStage?.windows ?? []
-        let newActiveSet = Set(newActive)
-        let entering = newActive.filter { mover.isParked($0) }
-        let leaving = oldActive.filter { w in
-            !newActiveSet.contains(w) && isOnBoard(w) && !alreadyOffScreen.contains(w)
+        var plan = transitionPlan(from: old, to: board)
+        plan.leaving.removeAll { alreadyOffScreen.contains($0) }
+        for w in alreadyOffScreen { runner?.forget(w) }
+        // In flight from the start: the moves happen a few frames (or a whole flight) later,
+        // and the focus noise of the app switch must not bounce stages meanwhile.
+        stamp(plan.leaving + plan.entering)
+        if let runner {
+            runner.run(plan, layout: layout)
+        } else {
+            show(plan.entering.filter { mover.isParked($0) })
+            hide(plan.leaving)
+            endBatch()
         }
-        show(entering)
-        hide(leaving)
-        if old.activeStageID != board.activeStageID, let front = newActive.first {
+        // Entering windows are raised by the runner once they are unparked.
+        if old.activeStageID != board.activeStageID, let front = board.activeStage?.windows.first,
+           !mover.isParked(front) {
             backend.raise(front)
         }
-        endBatch()
+        presenter?.boardChanged()
     }
 
     /// Unparks; a window that fails stays in the ledger (restoreAll / recovery still own it).
@@ -250,19 +357,29 @@ final class Coordinator {
     }
 
     /// Makes the screen match the board from scratch: active stage shown, all else parked.
+    /// Instant; cards of windows it moves are dropped, then the strip is laid out again.
     private func reconcile() {
         let active = Set(board.activeStage?.windows ?? [])
-        show(board.stages.flatMap(\.windows).filter { active.contains($0) && mover.isParked($0) })
+        let toShow = board.stages.flatMap(\.windows).filter { active.contains($0) && mover.isParked($0) }
+        runner?.discardCards(for: toShow)
+        show(toShow)
         hide(board.stages.flatMap(\.windows).filter { !active.contains($0) })
         if let front = board.activeStage?.windows.first { backend.raise(front) }
         endBatch()
+        runner?.update(layout: layout)
+        presenter?.boardChanged()
     }
 
     /// Stamps every window the batch touched, counting from now (the batch's end).
     private func endBatch() {
-        let until = Date().addingTimeInterval(Self.inFlightWindow)
-        for w in batchTouched { inFlight[w] = until }
+        stamp(Array(batchTouched))
         batchTouched = []
+    }
+
+    /// Marks windows in flight for `inFlightWindow`, counting from now.
+    private func stamp(_ windows: [WindowRef]) {
+        let until = Date().addingTimeInterval(Self.inFlightWindow)
+        for w in windows { inFlight[w] = until }
     }
 
     private func isInFlight(_ w: WindowRef) -> Bool {
@@ -274,13 +391,12 @@ final class Coordinator {
     // MARK: - Seeding
 
     /// Every on-screen manageable window joins its app's stage, back to front, so the
-    /// frontmost app's stage ends up active; then everything else is parked.
-    private func seed() {
+    /// frontmost app's stage ends up active. `finishStart` then parks everything else.
+    private func seedBoard() {
         for w in onScreenWindowsBackToFront() { board.windowOpened(w) }
         if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             board.appActivated(pid: front)
         }
-        reconcile()
     }
 
     /// After sleep: drop windows that died, add windows that appeared, then re-check
@@ -309,6 +425,8 @@ final class Coordinator {
         batchTouched.formUnion(ledger.entries().map(\.window))
         mover.repark(display: main.frame)
         endBatch()
+        runner?.screensChanged(layout: layout)
+        presenter?.boardChanged()
     }
 
     /// Manageable windows of regular apps, in on-screen z-order from back to front.
