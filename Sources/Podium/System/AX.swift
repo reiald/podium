@@ -46,6 +46,13 @@ enum AX {
         return AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, value) == .success
     }
 
+    @discardableResult
+    static func setSize(of window: AXUIElement, to size: CGSize) -> Bool {
+        var size = size
+        guard let value = AXValueCreate(.cgSize, &size) else { return false }
+        return AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, value) == .success
+    }
+
     static func string(_ attribute: String, of element: AXUIElement) -> String? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }

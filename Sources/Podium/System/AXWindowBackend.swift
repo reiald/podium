@@ -17,14 +17,34 @@ final class AXWindowBackend: WindowBackend {
         return AX.setPosition(of: e, to: p)
     }
 
-    /// Every window of every running regular app, parked ones included (they are still alive).
+    func setSize(_ s: CGSize, of w: WindowRef) -> Bool {
+        guard let e = element(for: w) else { return false }
+        return AX.setSize(of: e, to: s)
+    }
+
+    /// Every window the window server knows, on every Space, whose process is alive.
+    /// Deliberately independent of AX: a window AX cannot reach right now (another
+    /// Space, a hung app, a non-regular app) is still alive and must not be forgotten.
     func liveWindows() -> Set<WindowRef> {
-        var live: [WindowRef: AXUIElement] = [:]
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-            for (ref, e) in windows(of: app.processIdentifier) { live[ref] = e }
+        guard let info = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else {
+            NSLog("Podium: CGWindowListCopyWindowInfo failed; reporting no live windows")
+            return []
         }
-        elements = live
-        return Set(live.keys)
+        var pidAlive: [Int32: Bool] = [:]
+        var live = Set<WindowRef>()
+        for window in info {
+            guard let pid = window[kCGWindowOwnerPID as String] as? Int32,
+                  let number = window[kCGWindowNumber as String] as? UInt32 else { continue }
+            let alive = pidAlive[pid] ?? { let a = Self.isAlive(pid); pidAlive[pid] = a; return a }()
+            if alive { live.insert(WindowRef(pid: pid, windowID: number)) }
+        }
+        // Merge, don't replace: only drop cached elements of windows that are gone.
+        elements = elements.filter { live.contains($0.key) }
+        return live
+    }
+
+    func visibleScreens() -> [CGRect] {
+        Screens.all.map(\.visibleFrame)
     }
 
     func bundleID(of pid: Int32) -> String? {
@@ -39,6 +59,10 @@ final class AXWindowBackend: WindowBackend {
                          isFullscreen: AX.bool("AXFullScreen", of: e),
                          isMinimized: AX.bool(kAXMinimizedAttribute, of: e)) ? ref : nil
         }
+    }
+
+    private static func isAlive(_ pid: Int32) -> Bool {
+        kill(pid, 0) == 0 || errno == EPERM
     }
 
     private func windows(of pid: Int32) -> [(WindowRef, AXUIElement)] {

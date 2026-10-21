@@ -37,7 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func accessibilityGranted() {
-        mover.recover(visibleScreens: Screens.all.map(\.visibleFrame))
+        mover.recover(visibleScreens: backend.visibleScreens())
         if let bundleID = Self.debugParkBundle() {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.debugPark(bundleID: bundleID) }
         }
@@ -85,42 +85,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return args[i + 1]
     }
 
+    /// Written after a debug park, so scripts/kill-test.sh can tell kills that happened
+    /// after parking from kills that happened before it.
+    private static var debugParkMarkerURL: URL {
+        ledgerURL.deletingLastPathComponent().appendingPathComponent("debug-parked")
+    }
+
     private func debugPark(bundleID: String) {
+        var parked = 0
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
             for w in backend.manageableWindows(of: app.processIdentifier) {
                 guard let frame = backend.frame(of: w) else { continue }
                 let screen = Screens.containing(frame)
                 let ok = mover.park(w, display: screen.frame, displayID: screen.id)
+                if ok { parked += 1 }
                 NSLog("Podium: debug park %u -> %@", w.windowID, ok ? "parked" : "failed")
             }
         }
-    }
-}
-
-/// Screens in top-left-origin global (AX) coordinates.
-enum Screens {
-    struct Screen {
-        let id: UInt32
-        let frame: CGRect
-        let visibleFrame: CGRect
-    }
-
-    static var all: [Screen] {
-        let screens = NSScreen.screens
-        guard let primaryHeight = screens.first?.frame.height else { return [] }
-        func flip(_ r: CGRect) -> CGRect {
-            CGRect(x: r.minX, y: primaryHeight - r.maxY, width: r.width, height: r.height)
+        guard parked > 0 else { return }
+        do {
+            try "\(parked)\n".write(to: Self.debugParkMarkerURL, atomically: true, encoding: .utf8)
+        } catch {
+            NSLog("Podium: could not write debug park marker: %@", String(describing: error))
         }
-        return screens.map { s in
-            let id = (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
-            return Screen(id: id, frame: flip(s.frame), visibleFrame: flip(s.visibleFrame))
-        }
-    }
-
-    /// The screen containing the center of `frame`, else the primary screen.
-    static func containing(_ frame: CGRect) -> Screen {
-        let screens = all
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        return screens.first { $0.frame.contains(center) } ?? screens[0]
     }
 }

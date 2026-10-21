@@ -18,11 +18,13 @@ public func recoveryActions(
 ) -> [RecoveryAction] {
     entries.map { entry in
         guard liveWindows.contains(entry.window) else { return .forget(entry.window) }
-        return .restore(entry.window, to: clamped(entry.originalFrame, to: visibleScreens))
+        return .restore(entry.window, to: fitted(entry.originalFrame, to: visibleScreens))
     }
 }
 
-private func clamped(_ frame: CGRect, to screens: [CGRect]) -> CGRect {
+/// Fits `frame` onto `screens` (see `recoveryActions`). Shared with `WindowMover` so every
+/// restore uses the same rule.
+func fitted(_ frame: CGRect, to screens: [CGRect]) -> CGRect {
     guard let first = screens.first else { return frame }
     if screens.contains(where: { $0.contains(frame) }) { return frame }
 

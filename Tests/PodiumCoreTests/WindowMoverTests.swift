@@ -10,6 +10,10 @@ private final class FakeBackend: WindowBackend {
     /// When set, every move is clamped so the window stays fully inside this rect.
     var clampTo: CGRect?
     var onSetOrigin: ((CGPoint, WindowRef) -> Void)?
+    /// Windows the window server reports alive even though AX cannot reach them
+    /// (another Space, a hung app).
+    var unreachableButLive: Set<WindowRef> = []
+    var screens: [CGRect] = [display]
     private(set) var moves: [(WindowRef, CGPoint)] = []
 
     func frame(of w: WindowRef) -> CGRect? { frames[w] }
@@ -27,7 +31,14 @@ private final class FakeBackend: WindowBackend {
         return true
     }
 
-    func liveWindows() -> Set<WindowRef> { Set(frames.keys) }
+    func setSize(_ s: CGSize, of w: WindowRef) -> Bool {
+        guard frames[w] != nil, !refuseMoves.contains(w) else { return false }
+        frames[w]?.size = s
+        return true
+    }
+
+    func liveWindows() -> Set<WindowRef> { Set(frames.keys).union(unreachableButLive) }
+    func visibleScreens() -> [CGRect] { screens }
     func bundleID(of pid: Int32) -> String? { "com.example.\(pid)" }
 }
 
@@ -260,5 +271,117 @@ private func makeReadOnly(_ dir: URL) throws {
         #expect(backend.frames[a]?.origin == CGPoint(x: 1599, y: 999))
         #expect(backend.frames[b]?.origin == CGPoint(x: 1599, y: 999))
         #expect(ledger.entries().map(\.originalFrame) == [frameA, frameB])
+    }
+}
+
+@Test func restoreAllAndRecoverKeepEntryForLiveWindowThatCannotBeReached() throws {
+    try withLedger { _, ledger in
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: frameA, displayID: 1))
+        let backend = FakeBackend()
+        backend.unreachableButLive = [a]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        mover.restoreAll()
+        #expect(ledger.entries().map(\.window) == [a])
+        mover.recover(visibleScreens: [display])
+        #expect(ledger.entries().map(\.window) == [a])
+    }
+}
+
+@Test func unparkFitsFrameFromMissingDisplayOntoRemainingScreen() throws {
+    try withLedger { _, ledger in
+        let onGoneDisplay = CGRect(x: 1200, y: 100, width: 300, height: 200)
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: onGoneDisplay, displayID: 2))
+        let backend = FakeBackend()
+        backend.frames = [a: CGRect(origin: CGPoint(x: 1999, y: 799), size: onGoneDisplay.size)]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(mover.unpark(a))
+        let landed = try #require(backend.frames[a])
+        #expect(display.contains(landed))
+        #expect(landed == CGRect(x: 350, y: 300, width: 300, height: 200))
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func unparkCapsOversizedFrameToScreen() throws {
+    try withLedger { _, ledger in
+        let oversized = CGRect(x: 100, y: 100, width: 1500, height: 900)
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: oversized, displayID: 1))
+        let backend = FakeBackend()
+        backend.frames = [a: CGRect(origin: CGPoint(x: 999, y: 799), size: oversized.size)]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(mover.unpark(a))
+        #expect(backend.frames[a] == display)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func recoverCapsOversizedFrameToScreen() throws {
+    try withLedger { _, ledger in
+        let oversized = CGRect(x: 100, y: 100, width: 1500, height: 900)
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: oversized, displayID: 1))
+        let backend = FakeBackend()
+        backend.frames = [a: CGRect(origin: CGPoint(x: 999, y: 799), size: oversized.size)]
+
+        WindowMover(backend: backend, ledger: ledger).recover(visibleScreens: [display])
+        #expect(backend.frames[a] == display)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+private let rightScreen = CGRect(x: 1000, y: 0, width: 1000, height: 800)
+
+@Test func parkFailsWhenCornerShowsOnNeighbouringScreen() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        backend.screens = [display, rightScreen]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(!mover.park(a, display: display, displayID: 1))
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func parkOnRightmostOfTwoScreensSucceeds() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        let onRight = CGRect(x: 1200, y: 100, width: 300, height: 200)
+        backend.frames = [a: onRight]
+        backend.screens = [display, rightScreen]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(mover.park(a, display: rightScreen, displayID: 2))
+        #expect(backend.frames[a]?.origin == CGPoint(x: 1999, y: 799))
+    }
+}
+
+@Test func reparkThatWouldShowOnNeighbourPutsWindowBackOnStage() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+
+        backend.screens = [display, rightScreen]
+        mover.repark(display: display)
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
+@Test func emptyLivenessAnswerForgetsNothing() throws {
+    try withLedger { _, ledger in
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: frameA, displayID: 1))
+        let backend = FakeBackend()  // reports no live windows at all, as when the query fails
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        mover.restoreAll()
+        #expect(ledger.entries().map(\.window) == [a])
+        mover.recover(visibleScreens: [display])
+        #expect(ledger.entries().map(\.window) == [a])
     }
 }
