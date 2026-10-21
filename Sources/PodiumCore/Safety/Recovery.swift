@@ -7,9 +7,10 @@ public enum RecoveryAction: Equatable, Sendable {
 }
 
 /// Decides how to put parked windows back after a crash or relaunch.
-/// Windows that no longer exist are forgotten, never restored. Frames that touch
-/// a visible screen are restored unchanged; others are shrunk to fit and centered
-/// on the first visible screen.
+/// Windows that no longer exist are forgotten, never restored. Frames fully inside
+/// a visible screen are restored unchanged. Others are capped to the size of the
+/// screen they overlap most and moved minimally to fit inside it; frames overlapping
+/// no screen are centered on the first visible screen.
 public func recoveryActions(
     entries: [ParkedEntry],
     liveWindows: Set<WindowRef>,
@@ -23,15 +24,29 @@ public func recoveryActions(
 
 private func clamped(_ frame: CGRect, to screens: [CGRect]) -> CGRect {
     guard let first = screens.first else { return frame }
-    let onScreen = screens.contains { screen in
-        let i = frame.intersection(screen)
-        return !i.isNull && i.width > 0 && i.height > 0
+    if screens.contains(where: { $0.contains(frame) }) { return frame }
+
+    func area(_ r: CGRect) -> CGFloat {
+        let i = frame.intersection(r)
+        return i.isNull ? 0 : i.width * i.height
     }
-    if onScreen { return frame }
-    let width = min(frame.width, first.width)
-    let height = min(frame.height, first.height)
-    return CGRect(
-        x: first.minX + (first.width - width) / 2,
-        y: first.minY + (first.height - height) / 2,
-        width: width, height: height)
+    var target = first
+    var best: CGFloat = 0
+    for screen in screens where area(screen) > best {
+        best = area(screen)
+        target = screen
+    }
+
+    let width = min(frame.width, target.width)
+    let height = min(frame.height, target.height)
+    if best == 0 {
+        return CGRect(
+            x: target.minX + (target.width - width) / 2,
+            y: target.minY + (target.height - height) / 2,
+            width: width, height: height)
+    }
+    // Overlaps the screen but is not fully inside: translate minimally.
+    let x = min(max(frame.minX, target.minX), target.maxX - width)
+    let y = min(max(frame.minY, target.minY), target.maxY - height)
+    return CGRect(x: x, y: y, width: width, height: height)
 }

@@ -36,10 +36,27 @@ private let screen = CGRect(x: 0, y: 0, width: 1000, height: 800)
     #expect(screen.contains(frame))
 }
 
-@Test func recoveryLeavesPartlyVisibleFramesUnchanged() {
+@Test func recoveryMovesPartlyOffScreenFrameMinimallyInside() {
     let partly = entry(1, CGRect(x: 900, y: 100, width: 300, height: 200))
     let actions = recoveryActions(entries: [partly], liveWindows: [partly.window], visibleScreens: [screen])
-    #expect(actions == [.restore(partly.window, to: partly.originalFrame)])
+    #expect(actions == [.restore(partly.window, to: CGRect(x: 700, y: 100, width: 300, height: 200))])
+}
+
+@Test func recoveryMovesOnePointSliverFullyOnScreen() {
+    // Overlaps the screen by a single 1x1 corner, like a parked window.
+    let sliver = entry(1, CGRect(x: 999, y: 799, width: 300, height: 200))
+    let actions = recoveryActions(entries: [sliver], liveWindows: [sliver.window], visibleScreens: [screen])
+    guard case let .restore(_, to: frame)? = actions.first else { Issue.record("no restore"); return }
+    #expect(screen.contains(frame))
+    #expect(frame == CGRect(x: 700, y: 600, width: 300, height: 200))
+}
+
+@Test func recoveryPicksScreenWithLargestOverlap() {
+    let left = CGRect(x: 0, y: 0, width: 1000, height: 800)
+    let right = CGRect(x: 1000, y: 0, width: 1000, height: 800)
+    let e = entry(1, CGRect(x: 1900, y: 100, width: 300, height: 200))
+    let actions = recoveryActions(entries: [e], liveWindows: [e.window], visibleScreens: [left, right])
+    #expect(actions == [.restore(e.window, to: CGRect(x: 1700, y: 100, width: 300, height: 200))])
 }
 
 @Test func recoveryTreatsTouchingEdgeAsOffScreen() {

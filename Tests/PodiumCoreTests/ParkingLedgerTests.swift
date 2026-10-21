@@ -88,3 +88,48 @@ private func withTempDir(_ body: (URL) throws -> Void) throws {
         #expect(ledger.entries() == [entry(1, 10)])
     }
 }
+
+@Test func corruptFileBytesArePreservedInSetAsideFile() throws {
+    try withTempDir { dir in
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("parked.json")
+        let bytes = Data("not json \u{1}\u{2}".utf8)
+        try bytes.write(to: url)
+        _ = ParkingLedger(fileURL: url)
+        let aside = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+            .first { $0.hasPrefix("parked.json.corrupt-") }
+        #expect(aside != nil)
+        #expect(try Data(contentsOf: dir.appendingPathComponent(aside!)) == bytes)
+    }
+}
+
+@Test func unreadableFileIsSetAsideAsUnreadable() throws {
+    try withTempDir { dir in
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("parked.json")
+        try Data("[]".utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+        let ledger = ParkingLedger(fileURL: url)
+        #expect(ledger.entries().isEmpty)
+        let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+        #expect(names.contains { $0.hasPrefix("parked.json.unreadable-") })
+        #expect(!names.contains { $0.hasPrefix("parked.json.corrupt-") })
+    }
+}
+
+@Test func failedSetAsideBlocksWritesInsteadOfOverwriting() throws {
+    try withTempDir { dir in
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("parked.json")
+        let bytes = Data("garbage".utf8)
+        try bytes.write(to: url)
+        // A read-only directory makes the rename fail.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path) }
+        let ledger = ParkingLedger(fileURL: url)
+        #expect(ledger.entries().isEmpty)
+        #expect(throws: ParkingLedgerError.unrecognizedFileInTheWay) { try ledger.record(entry(1, 10)) }
+        #expect(throws: ParkingLedgerError.unrecognizedFileInTheWay) { try ledger.remove(w(1, 10)) }
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+}
