@@ -54,7 +54,7 @@ public struct StageBoard: Equatable, Sendable {
         if let active = activeStageID, let i = index(of: active),
            stages[i].windows.contains(where: { $0.pid == w.pid }) {
             insert(w, intoStageAt: i)
-        } else if let i = stages.firstIndex(where: { $0.windows.contains { $0.pid == w.pid } }) {
+        } else if let i = stageOfMostRecentWindow(pid: w.pid) {
             insert(w, intoStageAt: i)
             activate(stageID: stages[i].id)
         } else {
@@ -76,10 +76,7 @@ public struct StageBoard: Equatable, Sendable {
 
     /// Activates the stage holding the app's most recently focused window.
     public mutating func appActivated(pid: Int32) {
-        let best = stages.flatMap { $0.windows }
-            .filter { $0.pid == pid }
-            .max { (focusTick[$0] ?? 0) < (focusTick[$1] ?? 0) }
-        guard let best, let i = stageIndex(of: best) else { return }
+        guard let i = stageOfMostRecentWindow(pid: pid) else { return }
         activate(stageID: stages[i].id)
     }
 
@@ -159,6 +156,14 @@ public struct StageBoard: Equatable, Sendable {
     private func index(of id: UUID) -> Int? { stages.firstIndex { $0.id == id } }
     private func stage(_ id: UUID) -> Stage? { stages.first { $0.id == id } }
     private func stageIndex(of w: WindowRef) -> Int? { stages.firstIndex { $0.windows.contains(w) } }
+
+    /// Index of the stage holding the app's most recently focused window.
+    private func stageOfMostRecentWindow(pid: Int32) -> Int? {
+        let best = stages.flatMap { $0.windows }
+            .filter { $0.pid == pid }
+            .max { (focusTick[$0] ?? 0) < (focusTick[$1] ?? 0) }
+        return best.flatMap(stageIndex(of:))
+    }
 
     private mutating func touch(_ w: WindowRef) {
         clock += 1

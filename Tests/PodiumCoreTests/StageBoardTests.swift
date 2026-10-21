@@ -210,3 +210,18 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     #expect(!isManageable(role: "AXWindow", subrole: "AXStandardWindow", isFullscreen: false, isMinimized: true))
     #expect(!isManageable(role: nil, subrole: nil, isFullscreen: false, isMinimized: false))
 }
+
+@Test func windowOpenedJoinsStageOfAppsMostRecentWindowWhenSplit() {
+    var b = board()
+    b.windowOpened(w(1, 10)); let s1 = b.activeStageID!
+    b.windowOpened(w(1, 11))
+    b.moveToOwnStage(w(1, 11)); let s2 = b.activeStageID!   // app 1 split: s1, s2
+    b.windowFocused(w(1, 10))                                // s1 more recent
+    b.windowFocused(w(1, 11))                                // s2 more recent
+    b.windowOpened(w(2, 20))                                 // other app active
+    #expect(b.activeStage?.windows == [w(2, 20)])
+    b.windowOpened(w(1, 12))
+    #expect(b.activeStageID == s2)
+    #expect(Set(b.activeStage!.windows) == [w(1, 11), w(1, 12)])
+    #expect(b.stages.first { $0.id == s1 }?.windows == [w(1, 10)])
+}
