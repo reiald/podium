@@ -14,6 +14,9 @@ private final class FakeBackend: WindowBackend {
     /// (another Space, a hung app).
     var unreachableButLive: Set<WindowRef> = []
     var screens: [CGRect] = [display]
+    /// Full screen frames; defaults to the visible ones.
+    var fullFrames: [CGRect]?
+    private(set) var sizeChanges = 0
     private(set) var moves: [(WindowRef, CGPoint)] = []
 
     func frame(of w: WindowRef) -> CGRect? { frames[w] }
@@ -34,11 +37,13 @@ private final class FakeBackend: WindowBackend {
     func setSize(_ s: CGSize, of w: WindowRef) -> Bool {
         guard frames[w] != nil, !refuseMoves.contains(w) else { return false }
         frames[w]?.size = s
+        sizeChanges += 1
         return true
     }
 
     func liveWindows() -> Set<WindowRef> { Set(frames.keys).union(unreachableButLive) }
     func visibleScreens() -> [CGRect] { screens }
+    func screenFrames() -> [CGRect] { fullFrames ?? screens }
     func bundleID(of pid: Int32) -> String? { "com.example.\(pid)" }
 }
 
@@ -304,9 +309,9 @@ private func makeReadOnly(_ dir: URL) throws {
     }
 }
 
-@Test func unparkCapsOversizedFrameToScreen() throws {
+@Test func unparkCapsOversizedFrameOnMissingDisplay() throws {
     try withLedger { _, ledger in
-        let oversized = CGRect(x: 100, y: 100, width: 1500, height: 900)
+        let oversized = CGRect(x: 1200, y: 100, width: 1500, height: 900)
         try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: oversized, displayID: 1))
         let backend = FakeBackend()
         backend.frames = [a: CGRect(origin: CGPoint(x: 999, y: 799), size: oversized.size)]
@@ -383,5 +388,58 @@ private let rightScreen = CGRect(x: 1000, y: 0, width: 1000, height: 800)
         #expect(ledger.entries().map(\.window) == [a])
         mover.recover(visibleScreens: [display])
         #expect(ledger.entries().map(\.window) == [a])
+    }
+}
+
+/// Display with a 40-pt Dock strip at the bottom: visible frame is shorter than the full frame.
+private let visibleAboveDock = CGRect(x: 0, y: 0, width: 1000, height: 760)
+
+@Test func unparkRestoresExactFrameOverlappingDockOrPastEdge() throws {
+    let underDock = CGRect(x: 100, y: 500, width: 300, height: 290)    // bottom under the Dock
+    let pastRight = CGRect(x: 800, y: 100, width: 400, height: 300)    // 200 pt past the right edge
+    for original in [underDock, pastRight] {
+        try withLedger { _, ledger in
+            let backend = FakeBackend()
+            backend.frames = [a: original]
+            backend.screens = [visibleAboveDock]
+            backend.fullFrames = [display]
+            let mover = WindowMover(backend: backend, ledger: ledger)
+            #expect(mover.park(a, display: display, displayID: 1))
+
+            #expect(mover.unpark(a))
+            #expect(backend.frames[a] == original)
+            #expect(backend.sizeChanges == 0)
+            #expect(ledger.entries().isEmpty)
+        }
+    }
+}
+
+@Test func restoreAllRestoresExactReachableFrame() throws {
+    try withLedger { _, ledger in
+        let pastRight = CGRect(x: 800, y: 100, width: 400, height: 300)
+        let backend = FakeBackend()
+        backend.frames = [a: pastRight]
+        backend.screens = [visibleAboveDock]
+        backend.fullFrames = [display]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        #expect(mover.park(a, display: display, displayID: 1))
+
+        mover.restoreAll()
+        #expect(backend.frames[a] == pastRight)
+        #expect(backend.sizeChanges == 0)
+    }
+}
+
+@Test func unparkFitsFrameWhoseTitleStripIsBarelyOnScreen() throws {
+    try withLedger { _, ledger in
+        // Only 50 pt of the title strip is on the display: below the 60-pt reach rule.
+        let mostlyOff = CGRect(x: 950, y: 100, width: 400, height: 300)
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: mostlyOff, displayID: 1))
+        let backend = FakeBackend()
+        backend.frames = [a: CGRect(origin: CGPoint(x: 999, y: 799), size: mostlyOff.size)]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(mover.unpark(a))
+        #expect(backend.frames[a] == CGRect(x: 600, y: 100, width: 400, height: 300))
     }
 }

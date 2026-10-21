@@ -9,8 +9,10 @@ public protocol WindowBackend {
     /// Every window that still exists, whether or not it can be reached right now.
     func liveWindows() -> Set<WindowRef>
     func bundleID(of pid: Int32) -> String?
-    /// Usable frames of the currently attached screens.
+    /// Usable frames (minus menu bar and Dock) of the currently attached screens.
     func visibleScreens() -> [CGRect]
+    /// Full frames of the currently attached screens.
+    func screenFrames() -> [CGRect]
 }
 
 /// Moves windows off-stage and back without ever losing one.
@@ -60,11 +62,15 @@ public final class WindowMover {
         return false
     }
 
-    /// Moves `w` back to its original frame, fitted onto the screens attached now.
+    /// Moves `w` back to its exact original frame while that is still reachable on the
+    /// screens attached now; otherwise to the original fitted onto the visible screens.
     /// The ledger entry is removed only once the window reads back there.
     public func unpark(_ w: WindowRef) -> Bool {
         guard let e = entry(for: w) else { return false }
-        guard move(w, to: fitted(e.originalFrame, to: backend.visibleScreens())) else {
+        let original = e.originalFrame
+        let target = isReachable(original, onScreens: backend.screenFrames())
+            ? original : fitted(original, to: backend.visibleScreens())
+        guard move(w, to: target) else {
             log.error("Unpark of \(String(describing: w)) did not land on screen; keeping ledger entry")
             return false
         }

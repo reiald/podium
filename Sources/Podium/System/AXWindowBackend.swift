@@ -47,6 +47,10 @@ final class AXWindowBackend: WindowBackend {
         Screens.all.map(\.visibleFrame)
     }
 
+    func screenFrames() -> [CGRect] {
+        Screens.all.map(\.frame)
+    }
+
     func bundleID(of pid: Int32) -> String? {
         NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
     }

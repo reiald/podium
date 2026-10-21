@@ -22,6 +22,16 @@ public func recoveryActions(
     }
 }
 
+/// Whether a window at `frame` can still be grabbed: its top 30-pt title strip overlaps
+/// some screen's full frame by at least 60 pt wide and 20 pt tall.
+func isReachable(_ frame: CGRect, onScreens screens: [CGRect]) -> Bool {
+    let titleStrip = CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: 30)
+    return screens.contains { screen in
+        let i = titleStrip.intersection(screen)
+        return !i.isNull && i.width >= 60 && i.height >= 20
+    }
+}
+
 /// Fits `frame` onto `screens` (see `recoveryActions`). Shared with `WindowMover` so every
 /// restore uses the same rule.
 func fitted(_ frame: CGRect, to screens: [CGRect]) -> CGRect {
