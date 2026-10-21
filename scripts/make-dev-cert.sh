@@ -7,7 +7,8 @@ set -euo pipefail
 NAME="Podium Dev"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
-if security find-identity -p codesigning | grep -q "$NAME"; then
+identities="$(security find-identity -p codesigning || true)"
+if grep -q "\"$NAME\"" <<< "$identities"; then
     echo "'$NAME' signing identity already exists."
     exit 0
 fi

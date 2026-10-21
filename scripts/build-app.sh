@@ -5,7 +5,7 @@ cd "$(dirname "$0")/.."
 
 identity="${PODIUM_SIGN_IDENTITY:-}"
 if [ -z "$identity" ]; then
-    identities="$(security find-identity -v -p codesigning || true)"
+    identities="$(security find-identity -p codesigning || true)"
     identity="$(echo "$identities" | grep -m1 "Apple Development" | sed -E 's/.*"(.*)".*/\1/' || true)"
     if [ -z "$identity" ]; then
         identity="$(echo "$identities" | grep -m1 "Podium Dev" | sed -E 's/.*"(.*)".*/\1/' || true)"
