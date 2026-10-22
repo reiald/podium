@@ -419,7 +419,7 @@ private func threeWindowsThenOther() -> StageBoard {
     b.appActivated(pid: 1)
     let other = b.stripStages.first { $0.windows == [w(2, 20)] }!.id
     b.select(stageID: other)
-    #expect(b.activeStageID == other)
+    #expect(b.activeStage?.windows == [w(2, 20)])
     #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 11), w(1, 10)]])
 }
 
@@ -536,4 +536,34 @@ private func threeWindowsThenOther() -> StageBoard {
     b.appTerminated(pid: 1)
     #expect(b.stripStages.isEmpty)
     #expect(b.activeStage?.windows == [w(2, 20)])
+}
+
+@Test func activateOnPileKeepsItsFrontOnStage() {
+    var b = threeWindowsThenOther()            // 20 on stage, pile [12, 11, 10]
+    b.appActivated(pid: 1)                     // 12 on stage, pile [11, 10]
+    let pile = b.stripStages.first { $0.windows.allSatisfy { $0.pid == 1 } }!.id
+    b.activate(stageID: pile)                  // e.g. reseed restoring a stage merged into a pile
+    #expect(b.activeStage?.windows == [w(1, 11)])
+    b.appActivated(pid: 1)                     // must not swap back to 12
+    #expect(b.activeStage?.windows == [w(1, 11)])
+}
+
+@Test func singleWindowAppStageBehavesLikeAPileInCombinedStage() {
+    var b = oneAtATime()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))                   // 11 on stage, pile [10]
+    b.windowOpened(w(2, 20))
+    b.addToActiveStage(w(1, 11))               // stage: 11 + 20; strip: [10]
+    #expect(Set(b.activeStage!.windows) == [w(1, 11), w(2, 20)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 10)]])
+    b.windowFocused(w(1, 10))                  // a lone window, not a 2+ pile
+    #expect(b.activeStage?.windows == [w(1, 10)])
+    #expect(b.stripStages.map(\.windows) == [[w(2, 20)], [w(1, 11)]])
+}
+
+@Test func newWindowOfAppWithPileButNothingOnStageGetsItsOwnStage() {
+    var b = threeWindowsThenOther()            // 20 on stage, pile [12, 11, 10]
+    b.windowOpened(w(1, 13))
+    #expect(b.activeStage?.windows == [w(1, 13)])
+    #expect(b.stripStages.map(\.windows) == [[w(2, 20)], [w(1, 12), w(1, 11), w(1, 10)]])
 }

@@ -9,7 +9,8 @@ public enum WindowGrouping: String, Codable, Sendable {
     case allAtOnce, oneAtATime
 }
 
-/// A group of windows shown together. `windows` are in most-recently-focused order.
+/// A group of windows shown together. `windows` are in most-recently-focused order, except
+/// in a One at a Time pile, where they are in cycle order (the front comes on stage next).
 public struct Stage: Identifiable, Equatable, Sendable {
     public let id: UUID
     public internal(set) var windows: [WindowRef]
@@ -124,7 +125,7 @@ public struct StageBoard: Equatable, Sendable {
         guard let i = stageIndex(of: w) else { return }
         minimized.remove(w)
         touch(w)
-        if isPile(at: i) {
+        if isAppStripStage(at: i) {
             bringOnStageAlone(w, displacedToBack: false)
             return
         }
@@ -142,7 +143,7 @@ public struct StageBoard: Equatable, Sendable {
     /// no-op if the app has none.
     public mutating func appActivated(pid: Int32) {
         guard let i = stageOfMostRecentWindow(pid: pid) else { return }
-        if isPile(at: i), let best = mostRecentWindow(pid: pid) {
+        if isAppStripStage(at: i), let best = mostRecentWindow(pid: pid) {
             bringOnStageAlone(best, displacedToBack: false)
             return
         }
@@ -158,8 +159,10 @@ public struct StageBoard: Equatable, Sendable {
     /// Makes the stage active and most recently used. `nil` shows the desktop. One at a Time:
     /// activating a pile brings only its front window on stage.
     public mutating func activate(stageID: UUID?) {
-        if let stageID, let i = index(of: stageID), isPile(at: i) {
-            bringOnStageAlone(stages[i].windows[0], displacedToBack: false)
+        if let stageID, let i = index(of: stageID), isAppStripStage(at: i) {
+            let front = stages[i].windows[0]
+            touch(front)
+            bringOnStageAlone(front, displacedToBack: false)
             return
         }
         setActive(stageID)
@@ -170,7 +173,7 @@ public struct StageBoard: Equatable, Sendable {
     /// one. One at a Time, a pile's front window comes on stage alone and the app's window
     /// that was on stage goes to the back of the pile, so repeated clicks cycle through it.
     public mutating func select(stageID: UUID) {
-        if let i = index(of: stageID), isPile(at: i) {
+        if let i = index(of: stageID), isAppStripStage(at: i) {
             let front = stages[i].windows[0]
             touch(front)
             bringOnStageAlone(front, displacedToBack: true)
@@ -316,7 +319,13 @@ public struct StageBoard: Equatable, Sendable {
 
     /// One at a Time: a strip stage of several windows of one app.
     private func isPile(at i: Int) -> Bool {
-        grouping == .oneAtATime && stages[i].windows.count > 1 && singleApp(at: i) != nil
+        isAppStripStage(at: i) && stages[i].windows.count > 1
+    }
+
+    /// One at a Time: a strip stage of one app's windows (a pile, or a lone window). Bringing
+    /// one of its windows on stage goes through `bringOnStageAlone`.
+    private func isAppStripStage(at i: Int) -> Bool {
+        grouping == .oneAtATime && singleApp(at: i) != nil
     }
 
     private mutating func setActive(_ stageID: UUID?) {
@@ -337,7 +346,8 @@ public struct StageBoard: Equatable, Sendable {
         detach(w, fromStageAt: from)
         if let a = activeIndex {
             let displaced = stages[a].windows.filter { $0.pid == w.pid }
-            for d in displaced { detach(d, fromStageAt: activeIndex!) }
+            stages[a].windows.removeAll { $0.pid == w.pid }
+            if stages[a].windows.isEmpty { deleteStage(at: a) }
             pushToPile(displaced, atBack: displacedToBack)
         }
         activate(newStageWith: w)
