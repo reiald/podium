@@ -521,7 +521,10 @@ final class Coordinator {
                 NSLog("Podium: cannot read frame of %u (pid %d); not parking", w.windowID, w.pid)
                 continue
             }
-            let screen = Screens.containing(frame)
+            guard let screen = Screens.containing(frame) else {
+                NSLog("Podium: no screen attached; not parking %u (pid %d)", w.windowID, w.pid)
+                continue
+            }
             batchTouched.insert(w)
             if !mover.park(w, display: screen.frame, displayID: screen.id) {
                 NSLog("Podium: could not park %u (pid %d); leaving it on screen", w.windowID, w.pid)

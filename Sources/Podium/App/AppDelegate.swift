@@ -341,8 +341,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var parked = 0
         for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
             for w in backend.manageableWindows(of: app.processIdentifier) {
-                guard let frame = backend.frame(of: w) else { continue }
-                let screen = Screens.containing(frame)
+                guard let frame = backend.frame(of: w), let screen = Screens.containing(frame) else { continue }
                 let ok = mover.park(w, display: screen.frame, displayID: screen.id)
                 if ok { parked += 1 }
                 NSLog("Podium: debug park %u -> %@", w.windowID, ok ? "parked" : "failed")
@@ -374,8 +373,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             } catch {
                 NSLog("Podium: debug capture: on-stage snapshot of %u failed: %@", w.windowID, String(describing: error))
             }
-            let screen = Screens.containing(frame)
-            guard mover.park(w, display: screen.frame, displayID: screen.id) else {
+            guard let screen = Screens.containing(frame),
+                  mover.park(w, display: screen.frame, displayID: screen.id) else {
                 NSLog("Podium: debug capture: could not park %u", w.windowID)
                 return
             }

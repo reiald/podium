@@ -20,10 +20,11 @@ enum Screens {
         }
     }
 
-    /// The screen containing the center of `frame`, else the primary screen.
-    static func containing(_ frame: CGRect) -> Screen {
+    /// The screen containing the center of `frame`, else the primary screen; nil when no
+    /// screen is attached (lid closed without an external display, mid display change).
+    static func containing(_ frame: CGRect) -> Screen? {
         let screens = all
         let center = CGPoint(x: frame.midX, y: frame.midY)
-        return screens.first { $0.frame.contains(center) } ?? screens[0]
+        return screens.first { $0.frame.contains(center) } ?? screens.first
     }
 }

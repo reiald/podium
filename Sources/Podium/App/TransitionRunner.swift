@@ -356,7 +356,12 @@ final class TransitionRunner {
                 drop(w)
                 continue
             }
-            let screen = Screens.containing(frame)
+            guard let screen = Screens.containing(frame) else {
+                // No screen to park on: the window stays on stage, the card goes.
+                logger.error("no screen attached; not parking \(w.windowID, privacy: .public)")
+                reveal(w, t)
+                continue
+            }
             touched.append(w)
             if mover.park(w, display: screen.frame, displayID: screen.id,
                           restoreFrame: restoreFrames.removeValue(forKey: w)) {
@@ -376,8 +381,7 @@ final class TransitionRunner {
     private func parkNow(_ windows: [WindowRef]) {
         var touched: [WindowRef] = []
         for w in windows where !mover.isParked(w) && !backend.isMinimized(w) {
-            guard let frame = backend.frame(of: w) else { continue }
-            let screen = Screens.containing(frame)
+            guard let frame = backend.frame(of: w), let screen = Screens.containing(frame) else { continue }
             touched.append(w)
             if !mover.park(w, display: screen.frame, displayID: screen.id,
                            restoreFrame: restoreFrames.removeValue(forKey: w)) {
