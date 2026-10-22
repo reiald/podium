@@ -19,6 +19,10 @@ final class Settings: ObservableObject {
     }
     /// "Click an app's Dock icon to minimize it to the strip".
     @Published var dockClickMinimizes: Bool { didSet { defaults.set(dockClickMinimizes, forKey: "dockClickMinimizes") } }
+    /// "Click wallpaper to show desktop".
+    @Published var clickWallpaperShowsDesktop: Bool {
+        didSet { defaults.set(clickWallpaperShowsDesktop, forKey: "clickWallpaperShowsDesktop") }
+    }
     /// The onboarding window was completed once.
     @Published var onboarded: Bool { didSet { defaults.set(onboarded, forKey: "onboarded") } }
     /// Podium turned Apple's Stage Manager off (so the menu offers to turn it back on).
@@ -49,6 +53,7 @@ final class Settings: ObservableObject {
         autoHide = defaults.object(forKey: "autoHide") as? Bool ?? true
         windowGrouping = defaults.string(forKey: "appWindowGrouping").flatMap(WindowGrouping.init(rawValue:)) ?? .allAtOnce
         dockClickMinimizes = defaults.bool(forKey: "dockClickMinimizes")
+        clickWallpaperShowsDesktop = defaults.object(forKey: "clickWallpaperShowsDesktop") as? Bool ?? true
         onboarded = defaults.bool(forKey: "onboarded")
         turnedOffAppleStageManager = defaults.bool(forKey: "turnedOffAppleStageManager")
         hotKeyEnabled = defaults.object(forKey: "hotKeyEnabled") as? Bool ?? true
@@ -72,5 +77,6 @@ final class Settings: ObservableObject {
         autoHide = true
         windowGrouping = .allAtOnce
         dockClickMinimizes = false
+        clickWallpaperShowsDesktop = true
     }
 }

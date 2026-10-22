@@ -351,6 +351,17 @@ public struct StageBoard: Equatable, Sendable {
         mergePiles()
     }
 
+    /// Wallpaper click: the active stage goes to the front of the strip as it is, and the
+    /// stage area is left empty (desktop). One at a Time, a stage of one app's windows joins
+    /// that app's pile at its front. No-op on the desktop.
+    public mutating func showDesktop() {
+        guard let active = activeStageID else { return }
+        // A minimize can have put another stage ahead of the active one; it goes back behind.
+        setActive(active)
+        setActive(nil)
+        mergePiles()
+    }
+
     public mutating func minimize(_ w: WindowRef) {
         guard let from = stageIndex(of: w) else { return }
         minimized.insert(w)

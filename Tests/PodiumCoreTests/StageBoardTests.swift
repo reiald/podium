@@ -835,3 +835,67 @@ private func mixedStripStage() -> (StageBoard, UUID) {
     b.appActivated(pid: 1)
     #expect(b.activeStage?.windows == [w(1, 12)])
 }
+
+// MARK: - Wallpaper click: showDesktop
+
+@Test func showDesktopSendsWholeActiveStageToFrontOfStrip() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))                   // stage: 21, 20; strip: [10]
+    let stage = b.activeStageID!
+    b.showDesktop()
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.map(\.id).first == stage)
+    #expect(b.stripStages.map(\.windows) == [[w(2, 21), w(2, 20)], [w(1, 10)]])
+    // A strip click brings it back.
+    b.select(stageID: stage)
+    #expect(b.activeStageID == stage)
+    #expect(b.activeStage?.windows == [w(2, 21), w(2, 20)])
+}
+
+@Test func showDesktopOnDesktopIsNoOp() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.showDesktop()
+    let desktop = b
+    b.showDesktop()
+    #expect(b == desktop)
+    #expect(board().stages.isEmpty)
+}
+
+@Test func showDesktopPutsActiveStageAheadOfJustMinimizedWindow() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))
+    let stage = b.activeStageID!
+    b.minimize(w(2, 21))                        // its stage is ahead of the active one
+    b.showDesktop()
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.map(\.windows) == [[w(2, 20)], [w(2, 21)], [w(1, 10)]])
+    #expect(b.stripStages.first?.id == stage)
+}
+
+@Test func oneAtATimeShowDesktopJoinsWindowToFrontOfItsPile() {
+    var b = threeWindowsThenOther()            // stage: [20]; strip: [12, 11, 10]
+    b.select(stageID: b.stripStages[0].id)     // stage: [12]; strip: [20], [11, 10]
+    #expect(b.activeStage?.windows == [w(1, 12)])
+    b.showDesktop()
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 11), w(1, 10)], [w(2, 20)]])
+    // A strip click brings the same window back alone.
+    b.select(stageID: b.stripStages[0].id)
+    #expect(b.activeStage?.windows == [w(1, 12)])
+}
+
+@Test func oneAtATimeShowDesktopKeepsMixedStageTogether() {
+    var b = threeWindowsThenOther()            // stage: [20]; strip: [12, 11, 10]
+    b.addToActiveStage(w(1, 12))               // stage: 12, 20; strip: [11, 10]
+    let stage = b.activeStageID!
+    b.showDesktop()
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.first?.id == stage)
+    #expect(Set(b.stripStages[0].windows) == [w(1, 12), w(2, 20)])
+    #expect(b.stripStages.map(\.windows).last == [w(1, 11), w(1, 10)])
+}

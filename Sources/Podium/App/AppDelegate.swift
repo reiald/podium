@@ -181,6 +181,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.minimizeBehavior = settings.minimizeBehavior
         coordinator.autoHideEnabled = settings.autoHide
         coordinator.dockClickMinimizes = settings.dockClickMinimizes
+        coordinator.wallpaperClickShowsDesktop = settings.clickWallpaperShowsDesktop
         coordinator.setGrouping(settings.windowGrouping)
         coordinator.setCustomization(settings.customization)
         self.coordinator = coordinator
@@ -285,6 +286,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             apply(settings.$autoHide) { $0.autoHideEnabled = $1 },
             apply(settings.$windowGrouping) { $0.setGrouping($1) },
             apply(settings.$dockClickMinimizes) { $0.dockClickMinimizes = $1 },
+            apply(settings.$clickWallpaperShowsDesktop) { $0.wallpaperClickShowsDesktop = $1 },
             settings.$customization.dropFirst()
                 .throttle(for: .seconds(1.0 / 60.0), scheduler: DispatchQueue.main, latest: true)
                 .sink { [weak self] value in

@@ -17,6 +17,9 @@ import struct PodiumCore.WindowRef
 /// stage; a shift-click or drop adds it to the stage. The view closes on Esc, the icon again,
 /// a click outside the strip, the app running out of off-stage windows (or quitting), and
 /// any board change that brings more of the app's windows on stage.
+///
+/// A plain click elsewhere (`WallpaperPress`) is reported as a possible wallpaper click; the
+/// Coordinator's hit-test, off the main thread, decides whether it was.
 @MainActor
 final class StripPresenter {
     var onSelect: (UUID) -> Void = { _ in }
@@ -30,6 +33,16 @@ final class StripPresenter {
     var onShowWindow: (WindowRef) -> Void = { _ in }
     /// App view shift-click or drop: this window joins the stage.
     var onAddWindow: (WindowRef) -> Void = { _ in }
+    /// A press that began while a stage was on screen ended: at this point (AX coordinates)
+    /// if it was a plain click on the board's display outside the band, which may have been
+    /// on empty wallpaper (the Coordinator checks); nil if it was not. Only while
+    /// `wallpaperClickEnabled`.
+    var onWallpaperPressEnded: (CGPoint?) -> Void = { _ in }
+    /// Such a press is waiting for its mouse-up.
+    var wallpaperPressPending: Bool { wallpaperPress.isPending }
+    var wallpaperClickEnabled = false {
+        didSet { if !wallpaperClickEnabled { wallpaperPress.reset() } }
+    }
 
     private static let pollInterval = 1.0 / 30.0
     /// Overlap frames are re-read every this many polls (30 Hz / 3 = 10 Hz).
@@ -64,6 +77,13 @@ final class StripPresenter {
     /// Esc monitors, only while the app view is open.
     private var escapeMonitors: [Any] = []
     private static let escapeKeyCode: UInt16 = 53
+    private var wallpaperPress = WallpaperPress()
+    /// Menu tracking of any app (HIToolbox posts these for menu bar and context menus).
+    private static let menuTrackingNotifications: [(Notification.Name, Bool)] = [
+        (Notification.Name("com.apple.HIToolbox.beginMenuTrackingNotification"), true),
+        (Notification.Name("com.apple.HIToolbox.endMenuTrackingNotification"), false),
+    ]
+    private var menuTrackingTokens: [NSObjectProtocol] = []
     private let logger = Logger(subsystem: "dev.podium.Podium", category: "strip")
 
     private var layout: TransitionRunner.Layout { runner.layout }
@@ -100,12 +120,20 @@ final class StripPresenter {
         pollTimer = Timer.scheduledTimer(withTimeInterval: Self.pollInterval, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.poll() }
         }
-        if let down = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.mouseDown() }
+        if let down = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseDown, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.mouseDown(event) }
         }) { monitors.append(down) }
-        if let up = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp, handler: { [weak self] _ in
-            MainActor.assumeIsolated { self?.mouseUp() }
+        if let up = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.mouseUp(event) }
         }) { monitors.append(up) }
+        let center = DistributedNotificationCenter.default()
+        for (name, open) in Self.menuTrackingNotifications {
+            menuTrackingTokens.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    self?.wallpaperPress.menuTracking(open, time: ProcessInfo.processInfo.systemUptime)
+                }
+            })
+        }
         // Pointer moves over other apps: the panel must take the mouse as soon as the pointer
         // reaches a slot, before the click, without waiting for the next poll.
         if let moved = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] _ in
@@ -120,6 +148,8 @@ final class StripPresenter {
         pollTimer = nil
         monitors.forEach(NSEvent.removeMonitor)
         monitors = []
+        menuTrackingTokens.forEach(DistributedNotificationCenter.default().removeObserver)
+        menuTrackingTokens = []
         panel.orderOut(nil)
     }
 
@@ -264,16 +294,28 @@ final class StripPresenter {
 
     // MARK: - Drag-out
 
-    private func mouseDown() {
+    private func mouseDown(_ event: NSEvent) {
         // Another app got the click: it was outside the strip's items.
         closeAppView(reason: "click outside")
         framesAtMouseDown = activeStageFrames()
+        if wallpaperClickEnabled, board().activeStage != nil {
+            wallpaperPress.began(at: Self.location(of: event), time: event.timestamp,
+                                 modifiers: Self.modifiers(event.modifierFlags))
+        } else {
+            wallpaperPress.reset()
+        }
     }
 
     /// A stage window whose title bar was dragged and released over the band: the one
     /// active-stage window that moved without changing size since the mouse went down.
-    private func mouseUp() {
+    private func mouseUp(_ event: NSEvent) {
         defer { framesAtMouseDown = [:] }
+        let p = Self.location(of: event)
+        if wallpaperPress.isPending {
+            // Only on the board's display, outside the band (its gaps let clicks through).
+            let click = wallpaperPress.released(at: p, time: event.timestamp) && layout.screen.contains(p) && !band.contains(p)
+            onWallpaperPressEnded(click ? p : nil)
+        }
         guard !framesAtMouseDown.isEmpty, !runner.isHidden, band.contains(Self.pointer()) else { return }
         let now = activeStageFrames()
         let moved = framesAtMouseDown.filter { w, before in
@@ -364,6 +406,20 @@ final class StripPresenter {
         if let local = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { escape($0) ? nil : $0 }) {
             escapeMonitors.append(local)
         }
+    }
+
+    /// Where a mouse event happened, in AX (top-left-origin) coordinates.
+    private static func location(of event: NSEvent) -> CGPoint {
+        event.cgEvent?.location ?? pointer()
+    }
+
+    private static func modifiers(_ flags: NSEvent.ModifierFlags) -> ModifierSet {
+        var m: ModifierSet = []
+        if flags.contains(.command) { m.insert(.command) }
+        if flags.contains(.option) { m.insert(.option) }
+        if flags.contains(.shift) { m.insert(.shift) }
+        if flags.contains(.control) { m.insert(.control) }
+        return m
     }
 
     /// The pointer in AX (top-left-origin) coordinates.

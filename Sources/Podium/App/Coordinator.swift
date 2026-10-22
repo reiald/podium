@@ -44,6 +44,14 @@ final class Coordinator {
     var autoHideEnabled = true {
         didSet { presenter?.setAutoHideEnabled(autoHideEnabled) }
     }
+    /// A plain click on empty wallpaper sends the stage to the strip (`showDesktop`).
+    var wallpaperClickShowsDesktop = true {
+        didSet { presenter?.wallpaperClickEnabled = wallpaperClickShowsDesktop }
+    }
+    /// A wallpaper press's hit-test is running.
+    private var wallpaperVerdictPending = false
+    /// Finder's activation by that press, applied only if it was not a wallpaper click.
+    private var heldFinderActivation: pid_t?
     /// Windows the minimize fallback is bringing back from the Dock, until the given time:
     /// their own (de)minimize and focus noise must not move stages meanwhile.
     private var unminimizing: [WindowRef: Date] = [:]
@@ -118,8 +126,10 @@ final class Coordinator {
         presenter.onDragOut = { [weak self] in self?.dragOut($0, restoreTo: $1) }
         presenter.onShowWindow = { [weak self] in self?.show(window: $0) }
         presenter.onAddWindow = { [weak self] in self?.addToActive(window: $0) }
+        presenter.onWallpaperPressEnded = { [weak self] in self?.wallpaperPressEnded(at: $0) }
         self.presenter = presenter
         presenter.setAutoHideEnabled(autoHideEnabled)
+        presenter.wallpaperClickEnabled = wallpaperClickShowsDesktop
         // Overlay (in the runner) and panel are shown now, not at the first transition.
         presenter.start()
 
@@ -329,6 +339,47 @@ final class Coordinator {
         apply(from: old)
         // The dragged window is about to be parked and must not keep keyboard focus.
         handOffFocus(from: w)
+    }
+
+    /// A press that may be a wallpaper click ended (`p` nil: it was not a plain click). The
+    /// hit-test runs off the main thread (`WallpaperProbe`); only a click on the bare desktop
+    /// shows it. Otherwise a Finder activation held for the verdict goes through.
+    private func wallpaperPressEnded(at p: CGPoint?) {
+        guard let p, isRunning, wallpaperClickShowsDesktop, board.activeStageID != nil else {
+            return releaseFinderActivation()
+        }
+        wallpaperVerdictPending = true
+        WallpaperProbe.check(p) { [weak self] isWallpaper in
+            guard let self else { return }
+            self.wallpaperVerdictPending = false
+            if isWallpaper {
+                self.heldFinderActivation = nil
+                self.showDesktop()
+            } else {
+                self.releaseFinderActivation()
+            }
+        }
+    }
+
+    /// Finder's activation by a desktop press, held while the press may be a wallpaper click.
+    private func releaseFinderActivation() {
+        guard let pid = heldFinderActivation else { return }
+        heldFinderActivation = nil
+        if isRunning, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { handle(.appActivated(pid)) }
+    }
+
+    /// Wallpaper click: the whole active stage flies to the front of the strip and the stage
+    /// area is left empty, as when switching away from it; Finder takes focus. A strip click
+    /// brings it back. Nothing to do on the desktop.
+    func showDesktop() {
+        guard isRunning, !applying, wallpaperClickShowsDesktop,
+              let leaving = board.activeStage?.windows.first else { return }
+        logger.log("wallpaper clicked; \(self.board.activeStage?.windows.count ?? 0, privacy: .public) window(s) go to the strip")
+        let old = board
+        board.showDesktop()
+        apply(from: old)
+        // The stage's windows are about to be parked and must not keep keyboard focus.
+        handOffFocus(from: leaving)
     }
 
     /// Whether a minimize of `w` can go to the strip: an on-screen window of the active stage.
@@ -651,6 +702,12 @@ final class Coordinator {
             if closeFocus.ignores(appActivated: pid, at: CACurrentMediaTime(), board: board) {
                 return keepStageAfterClose(from: nil)
             }
+            // A press on the desktop activates Finder; if it turns out to be a wallpaper
+            // click, Finder's most recent stage must not come on stage first.
+            if presenter?.wallpaperPressPending == true || wallpaperVerdictPending, isDesktopFocused(pid) {
+                heldFinderActivation = pid
+                return
+            }
             // Prefer the window the app actually focused; fall back to its most recent one.
             // A window Podium just moved doesn't count: after `select`, the app can still
             // report the window that was just parked.
@@ -693,6 +750,14 @@ final class Coordinator {
             }
         }
         apply(from: old, alreadyOffScreen: Set(offScreen))
+    }
+
+    /// Finder with its desktop focused (its focused "window" is the desktop's scroll area),
+    /// as after a press on the desktop. One AX read, Finder only.
+    private func isDesktopFocused(_ pid: pid_t) -> Bool {
+        guard NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == "com.apple.finder",
+              !AX.isHung(pid), let focused = AX.focusedWindow(of: pid) else { return false }
+        return AX.string(kAXRoleAttribute, of: focused) == kAXScrollAreaRole
     }
 
     /// macOS hid the app (Cmd-H, Hide Others): its windows are off screen and must not be

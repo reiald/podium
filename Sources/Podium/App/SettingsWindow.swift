@@ -69,6 +69,7 @@ struct SettingsView: View {
                     Text("Click an app's Dock icon to minimize it to the strip")
                     Text("Turn off the same option in other apps, such as Vorssaint.")
                 }
+                Toggle("Click wallpaper to show desktop", isOn: $settings.clickWallpaperShowsDesktop)
             }
             HStack {
                 Spacer()
