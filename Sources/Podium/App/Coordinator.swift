@@ -711,13 +711,12 @@ final class Coordinator {
             // Prefer the window the app actually focused; fall back to its most recent one.
             // A window Podium just moved doesn't count: after `select`, the app can still
             // report the window that was just parked.
-            if let focused = focusedWindow(of: pid), isOnBoard(focused), !isInFlight(focused),
-               !backend.isMinimized(focused) {
-                if backend.isFullScreen(focused) {
-                    dropFullScreen(focused)
-                } else {
-                    board.windowFocused(focused)
-                }
+            let focused = focusedWindow(of: pid)
+            if let focused, fullScreen.contains(focused) || backend.isFullScreen(focused) {
+                // Its full-screen Space came forward: the stages stay as they are.
+                dropFullScreen(focused)
+            } else if let focused, isOnBoard(focused), !isInFlight(focused), !backend.isMinimized(focused) {
+                board.windowFocused(focused)
             } else {
                 board.appActivated(pid: pid)
             }
@@ -746,7 +745,7 @@ final class Coordinator {
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { board.appActivated(pid: pid) }
             logger.log("pid \(pid, privacy: .public) shown again")
             DispatchQueue.main.asyncAfter(deadline: .now() + Self.unhideSettle) { [weak self] in
-                self?.settleUnhidden(pid: pid)
+                self?.settleUnhidden(pid: pid, retry: true)
             }
         }
         apply(from: old, alreadyOffScreen: Set(offScreen))
@@ -771,12 +770,30 @@ final class Coordinator {
     /// ones that were on stage when it was hidden, and are not now, are still on screen:
     /// they are parked (no card flight; their strip cards fade in from cached snapshots).
     /// Parked ones on the stage now are unparked, in case the move to the stage happened
-    /// while macOS still reported the app hidden.
-    private func settleUnhidden(pid: pid_t) {
-        guard isRunning, !applying, !isHidden(pid) else { return }
+    /// while macOS still reported the app hidden. An activation dropped meanwhile (the hidden
+    /// flag read stale) is applied first; a flag still stale is given one `retry`.
+    private func settleUnhidden(pid: pid_t, retry: Bool) {
+        guard isRunning, !applying else { return }
+        guard !isHidden(pid) else {
+            logger.log("pid \(pid, privacy: .public) still reads hidden after unhide\(retry ? "; retrying" : "; giving up", privacy: .public)")
+            if retry {
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.unhideSettle) { [weak self] in
+                    self?.settleUnhidden(pid: pid, retry: false)
+                }
+            }
+            return
+        }
+        // Windows leaving the stage now are the runner's to park, with their card flight.
+        var leavingNow: Set<WindowRef> = []
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+            let old = board
+            board.appActivated(pid: pid)
+            leavingNow = Set(old.activeStage?.windows ?? [])
+            apply(from: old)
+        }
         let active = Set(board.activeStage?.windows ?? [])
         let windows = board.stages.flatMap(\.windows).filter { $0.pid == pid }
-        let strays = windows.filter { !active.contains($0) && !mover.isParked($0) }
+        let strays = windows.filter { !active.contains($0) && !leavingNow.contains($0) && !mover.isParked($0) }
         let missing = windows.filter { active.contains($0) && mover.isParked($0) && unparkRetry.mayTry($0) }
         guard !strays.isEmpty || !missing.isEmpty else { return }
         logger.log("pid \(pid, privacy: .public) shown again: parking \(strays.count, privacy: .public), unparking \(missing.count, privacy: .public)")
@@ -792,7 +809,7 @@ final class Coordinator {
 
     /// `w` went full screen (or into Split View), onto a Space of its own: Podium stops
     /// managing it until it leaves (`checkFullScreen`). Not a close: a parked one keeps its
-    /// ledger entry, which `recoverStrays` puts back.
+    /// ledger entry and is unparked when it comes back on stage.
     private func dropFullScreen(_ w: WindowRef) {
         fullScreen.insert(w)
         guard isOnBoard(w) else { return }
@@ -837,10 +854,11 @@ final class Coordinator {
     /// Run on every Space switch; cheap when there are none, and unreachable entries stay.
     private func recoverStrays() {
         guard isRunning, !applying else { return }
-        let onBoard = Set(board.stages.flatMap(\.windows))
-        guard ledger.entries().contains(where: { !onBoard.contains($0.window) }) else { return }
+        // Full-screen windows are left alone: they come back through `checkFullScreen`.
+        let owned = Set(board.stages.flatMap(\.windows)).union(fullScreen)
+        guard ledger.entries().contains(where: { !owned.contains($0.window) }) else { return }
         NSLog("Podium: Space changed; retrying recovery of windows no stage owns")
-        mover.recover(visibleScreens: backend.visibleScreens(), only: { !onBoard.contains($0) })
+        mover.recover(visibleScreens: backend.visibleScreens(), only: { !owned.contains($0) })
     }
 
     private func focusedWindow(of pid: pid_t) -> WindowRef? {

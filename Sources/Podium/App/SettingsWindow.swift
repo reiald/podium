@@ -113,6 +113,7 @@ final class SettingsWindowController {
     private var window: NSWindow?
     private let settings: Settings
     private let loginItem = LoginItem()
+    private var keyObserver: NSObjectProtocol?
 
     init(settings: Settings) {
         self.settings = settings
@@ -129,6 +130,11 @@ final class SettingsWindowController {
             w.isReleasedWhenClosed = false
             w.center()
             window = w
+            // Back from System Settings > Login Items: read the state again.
+            keyObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: w, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.loginItem.refresh() }
+            }
         }
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)

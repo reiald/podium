@@ -24,6 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     /// Bumped by each hotkey flash, so only the latest one restores the icon.
     private var statusFlash = 0
+    /// What the steady status icon shows now (nil: not drawn yet, or a flash replaced it).
+    private var statusIconOn: Bool?
+    private var statusFlashing = false
+    private var spaceObserver: NSObjectProtocol?
     private lazy var hotKey = HotKey { [weak self] in self?.togglePodiumFromHotKey() }
     private let backend = AXWindowBackend()
     private lazy var ledger = ParkingLedger(fileURL: Self.ledgerURL)
@@ -55,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installStatusItem()
         installSignalHandlers()
         observeSettings()
+        observeSpaceChanges()
 
         // A previous run (or crash) may have left windows parked.
         axWasTrusted = AXIsProcessTrusted()
@@ -127,6 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSLog("Podium: Accessibility revoked; suspending")
         coordinator?.suspend()
         coordinator = nil
+        refreshStatusIcon()
         showAccessibilityAlert(title: "Podium lost Accessibility access",
                                text: "Podium can't move windows without it, so it has stopped. Your windows will be restored as soon as you grant Accessibility access again.")
     }
@@ -160,6 +166,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if AXIsProcessTrusted() { coordinator.restoreAll() } else { coordinator.suspend() }
             self.coordinator = nil
         }
+        refreshStatusIcon()
+    }
+
+    /// Off (or paused) with windows still parked: a restore failed, e.g. for a window that was
+    /// full screen on its own Space then. Leaving full screen switches Spaces, so recovery
+    /// runs on each switch, and once more a moment later (the exit animation can still be
+    /// moving the window back). The running Coordinator handles its own windows.
+    private func observeSpaceChanges() {
+        spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.recoverWhileOff()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.recoverWhileOff() }
+            }
+        }
+    }
+
+    private func recoverWhileOff() {
+        guard coordinator == nil, !debugHold, AXIsProcessTrusted(), !ledger.entries().isEmpty else { return }
+        NSLog("Podium: Space changed while not managing; retrying recovery of parked windows")
+        mover.recover(visibleScreens: backend.visibleScreens())
     }
 
     /// A full fresh start: recovery, then a new Coordinator (seed, observer, tap, strip).
@@ -274,8 +301,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         settingsSubscriptions = [
-            settings.$enabled.dropFirst().sink { [weak self] value in
-                MainActor.assumeIsolated { self?.updateStatusIcon(enabled: value) }
+            // Fires at willSet; the icon follows once the Coordinator has followed the change.
+            settings.$enabled.dropFirst().sink { [weak self] _ in
+                DispatchQueue.main.async { self?.refreshStatusIcon() }
             },
             // No dropFirst: this also registers the hotkey at launch.
             settings.$hotKeyEnabled.sink { [weak self] value in
@@ -354,29 +382,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Quit Podium", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
-        updateStatusIcon(enabled: settings.enabled)
+        refreshStatusIcon()
     }
 
-    /// The strip symbol when on; dimmed when off.
-    private func updateStatusIcon(enabled: Bool) {
-        guard let button = statusItem?.button else { return }
+    /// Podium is actually managing windows: on, set up (permissions, onboarding, Apple's
+    /// Stage Manager off) and running.
+    private var isManaging: Bool { coordinator != nil }
+
+    /// The strip symbol when managing; dimmed when off or waiting on setup.
+    private func refreshStatusIcon() {
+        let on = isManaging
+        guard let button = statusItem?.button, !statusFlashing, statusIconOn != on else { return }
+        statusIconOn = on
         button.image = NSImage(systemSymbolName: "rectangle.split.3x1",
-                               accessibilityDescription: enabled ? "Podium" : "Podium (off)")
-        button.appearsDisabled = !enabled
+                               accessibilityDescription: on ? "Podium" : "Podium (off)")
+        button.appearsDisabled = !on
     }
 
-    /// Shows a filled (on) or slashed (off) symbol for a moment, then the steady icon.
+    /// Shows a filled (managing) or slashed (not) symbol for a moment, then the steady icon.
     private func flashStatusItem() {
         guard let button = statusItem?.button else { return }
-        let enabled = settings.enabled
+        let on = isManaging
+        statusIconOn = nil
+        statusFlashing = true
         statusFlash += 1
         let flash = statusFlash
-        button.image = NSImage(systemSymbolName: enabled ? "rectangle.split.3x1.fill" : "rectangle.slash",
-                               accessibilityDescription: enabled ? "Podium" : "Podium (off)")
+        button.image = NSImage(systemSymbolName: on ? "rectangle.split.3x1.fill" : "rectangle.slash",
+                               accessibilityDescription: on ? "Podium" : "Podium (off)")
         button.appearsDisabled = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, self.statusFlash == flash else { return }
-            self.updateStatusIcon(enabled: self.settings.enabled)
+            self.statusFlashing = false
+            self.refreshStatusIcon()
         }
     }
 

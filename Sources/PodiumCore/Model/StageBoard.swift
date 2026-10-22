@@ -32,7 +32,8 @@ public struct Stage: Identifiable, Equatable, Sendable {
 ///   minimized window as the app's most recent one.
 /// - `appHidden(pid)` (Cmd-H): the app's windows on the active stage leave it as with
 ///   `sendAppToStrip`; until `appUnhidden(pid)` none of the app's windows gets a strip slot,
-///   and `appActivated` and `windowOpened` never pick one as the app's most recent one.
+///   `appActivated` and `windowOpened` never pick one as the app's most recent one, and
+///   `windowFocused` of one is a no-op.
 /// - Activating a stage makes it the most recently used.
 ///
 /// With `grouping == .oneAtATime` (`allAtOnce` is the default and follows only the rules above):
@@ -130,9 +131,10 @@ public struct StageBoard: Equatable, Sendable {
         mergePiles()
     }
 
-    /// Records `w` as most recently focused and activates its stage.
+    /// Records `w` as most recently focused and activates its stage. No-op while its app is
+    /// hidden.
     public mutating func windowFocused(_ w: WindowRef) {
-        guard let i = stageIndex(of: w) else { return }
+        guard !hidden.contains(w.pid), let i = stageIndex(of: w) else { return }
         minimized.remove(w)
         touch(w)
         if isAppStripStage(at: i) {

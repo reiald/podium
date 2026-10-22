@@ -899,3 +899,27 @@ private func mixedStripStage() -> (StageBoard, UUID) {
     #expect(Set(b.stripStages[0].windows) == [w(1, 12), w(2, 20)])
     #expect(b.stripStages.map(\.windows).last == [w(1, 11), w(1, 10)])
 }
+
+@Test func hidingAppWithOnlyStripStagesKeepsTheStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.windowOpened(w(2, 20))
+    let active = b.activeStageID
+    let order = b.stripStages.map(\.id)
+    b.appHidden(pid: 1)
+    #expect(b.activeStageID == active)
+    #expect(b.stripStages.map(\.id) == order)
+    #expect(b.visibleStripStages.isEmpty)
+}
+
+@Test func focusingHiddenAppsWindowIsNoOp() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.appHidden(pid: 1)
+    let before = b
+    b.windowFocused(w(1, 10))
+    #expect(b == before)
+    #expect(b.activeStage?.windows == [w(2, 20)])
+}
