@@ -45,7 +45,7 @@ public struct Tuning: Codable, Equatable, Sendable {
         autoHideOverlapThreshold: 0.15,
         hiddenPeekWidth: 6,
         stageInset: 24,
-        transitionSpring: Spring(response: 0.42, dampingRatio: 0.86),
+        transitionSpring: Spring(response: 0.32, dampingRatio: 0.9),
         hoverSpring: Spring(response: 0.25, dampingRatio: 0.8)
     )
 }

@@ -45,6 +45,11 @@ actor Capture {
 
     private let isParked: @MainActor @Sendable (WindowRef) -> Bool
     private var snapshots: [WindowRef: CGImage] = [:]
+    /// Full-resolution snapshots of the few most recently parked windows, so a window
+    /// coming back flies in sharp instead of as its upscaled strip thumbnail.
+    private var recentFull: [WindowRef: CGImage] = [:]
+    private var recentOrder: [WindowRef] = []
+    private static let recentFullLimit = 3
     private var refreshing: Set<WindowRef> = []
     /// Snapshots running per window, and windows forgotten while one was running: such a
     /// capture must not put the window back in the cache. Both only hold in-flight work.
@@ -138,6 +143,7 @@ actor Capture {
             let target = Self.fit(CGSize(width: image.width, height: image.height), within: maxPixelSize)
             if Int(target.width) < image.width || Int(target.height) < image.height,
                let small = Self.downscale(image, to: target) {
+                keepRecentFull(image, for: w)
                 snapshots[w] = small
                 result[w] = small
             } else {
@@ -159,9 +165,25 @@ actor Capture {
         return context.makeImage()
     }
 
+    /// The sharpest snapshot of `w`: its full-resolution one if it was parked recently.
+    func sharpSnapshot(_ w: WindowRef) -> CGImage? {
+        recentFull[w] ?? snapshots[w]
+    }
+
+    private func keepRecentFull(_ image: CGImage, for w: WindowRef) {
+        recentFull[w] = image
+        recentOrder.removeAll { $0 == w }
+        recentOrder.append(w)
+        while recentOrder.count > Self.recentFullLimit {
+            recentFull[recentOrder.removeFirst()] = nil
+        }
+    }
+
     /// Drops a closed window's cached snapshot.
     func forget(_ w: WindowRef) {
         snapshots[w] = nil
+        recentFull[w] = nil
+        recentOrder.removeAll { $0 == w }
         loggedFailures.remove(w)
         if capturing[w] != nil { forgottenWhileCapturing.insert(w) }
     }

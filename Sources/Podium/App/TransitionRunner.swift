@@ -54,8 +54,6 @@ final class TransitionRunner {
     /// Strip cards slide this far beyond the band when hidden, so their shadows go too.
     private static let hiddenShadowMargin: CGFloat = 20
     private static let transitionZ: CGFloat = 1000
-    /// How long a leaving window's snapshot refresh may hold up its transition.
-    private static let snapshotWait: TimeInterval = 1.0 / 60.0
 
     /// Called with every window a park/unpark batch touched, right after the batch ends.
     var onBatchEnd: ([WindowRef]) -> Void = { _ in }
@@ -208,6 +206,20 @@ final class TransitionRunner {
             setZ(t.card, Self.transitionZ)
             animator.drive(t.card, to: framePose(frame, card: t.card), spring: layout.tuning.transitionSpring)
             animator.onSettled(t.card) { [weak self] in self?.entered(w, generation: generation) }
+            // The strip shows a small thumbnail; fly in with a full-resolution snapshot: the
+            // recent one if kept, else a fresh capture of the parked window (it lands while the
+            // card is still small enough for the thumbnail to look fine).
+            let capture = self.capture
+            Task { @MainActor [weak self] in
+                var image = await capture.sharpSnapshot(w)
+                if (image?.width ?? 0) < Int(frame.width) {
+                    image = (try? await capture.snapshot(w, pointSize: frame.size)) ?? image
+                }
+                guard let image, let self,
+                      let t = self.tracks[w], t.phase == .entering, t.generation == generation,
+                      let current = t.card.image, image.width > current.width else { return }
+                t.card.image = image
+            }
         case .revealing:
             break
         }
@@ -310,8 +322,8 @@ final class TransitionRunner {
         let capture = self.capture
         let leaving = fresh
         Task { @MainActor [weak self] in
-            // Fresh snapshots if they come back within a frame; the cached ones otherwise.
-            await awaitAtMost(Self.snapshotWait) { await capture.refreshOnStage(leaving) }
+            // The cached snapshots (refreshed every 1–4 s while on stage): waiting for a fresh
+            // capture delayed every leave by 25–60 ms.
             var images: [WindowRef: CGImage] = [:]
             for w in leaving {
                 if let image = await capture.cachedSnapshot(w) { images[w] = image }

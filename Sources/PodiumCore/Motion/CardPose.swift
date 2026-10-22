@@ -29,7 +29,9 @@ public struct CardPose: Equatable, Sendable {
         precondition(value.count == dimension && velocity.count == dimension && target.count == dimension,
                      "CardPose vectors must have \(dimension) components")
         for i in 0..<dimension {
-            let (maxOffset, maxSpeed) = i < 2 ? (0.25, 2.5) : (1e-3, 1e-2)
+            // Position within 1 pt and slower than 30 pt/s: the real window can take over
+            // without a visible jump, without waiting out the spring's invisible tail.
+            let (maxOffset, maxSpeed) = i < 2 ? (1.0, 30.0) : (1e-3, 1e-2)
             if abs(value[i] - target[i]) >= maxOffset || abs(velocity[i]) >= maxSpeed { return false }
         }
         return true

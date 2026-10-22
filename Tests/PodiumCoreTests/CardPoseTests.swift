@@ -25,15 +25,15 @@ import Testing
 @Test func cardSettlesInPointsForPositionAndUnitsForTheRest() {
     let target = CardPose(center: CGPoint(x: 100, y: 100), scale: 0.2, tilt: 0.3, alpha: 1).vector()
     let zero = [Double](repeating: 0, count: CardPose.dimension)
-    // 0.2 pt off and drifting at 2 pt/s is visually at rest.
-    var near = target; near[0] += 0.2
-    var slow = zero; slow[1] = 2
+    // 0.8 pt off and drifting at 20 pt/s is visually at rest (the window takes over here).
+    var near = target; near[0] += 0.8
+    var slow = zero; slow[1] = 20
     #expect(CardPose.isSettled(value: near, velocity: slow, target: target))
-    // 0.3 pt off is not.
-    var far = target; far[0] += 0.3
+    // 1.2 pt off is not.
+    var far = target; far[0] += 1.2
     #expect(!CardPose.isSettled(value: far, velocity: zero, target: target))
-    // 3 pt/s is still moving.
-    var fast = zero; fast[0] = 3
+    // 40 pt/s is still moving.
+    var fast = zero; fast[0] = 40
     #expect(!CardPose.isSettled(value: target, velocity: fast, target: target))
     // Scale, tilt and alpha use 1e-3 displacement and 1e-2 velocity.
     var scaleOff = target; scaleOff[2] += 0.002
