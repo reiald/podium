@@ -150,6 +150,9 @@ final class Coordinator {
         observe(NSWorkspace.shared.notificationCenter, NSWorkspace.screensDidWakeNotification) { [weak self] in
             self?.startSnapshotTimer()
         }
+        observe(NSWorkspace.shared.notificationCenter, NSWorkspace.activeSpaceDidChangeNotification) { [weak self] in
+            self?.recoverStrays()
+        }
         if !CGPreflightScreenCaptureAccess() {
             // Shows the system prompt once; capture starts working after a relaunch.
             CGRequestScreenCaptureAccess()
@@ -417,23 +420,27 @@ final class Coordinator {
             guard isOnBoard(w) || shouldManage(w) else { return }
             board.windowOpened(w)
         case let .closed(w):
-            // A spurious destroyed notification must not strand a parked window: only a
-            // window the window server no longer lists is gone. It may lag the notification,
-            // so a window still listed is checked once more a moment later.
-            let live = backend.liveWindows()
-            if live.contains(w) {
+            // On screen: believed at once (apps that hide a window on close keep it listed,
+            // which would leave a ghost stage). Parked: a spurious destroyed notification
+            // must not strand it, so it is gone only once the window server no longer lists
+            // it. The list may lag the notification: a listed window is checked again later.
+            let parked = mover.isParked(w)
+            let live = parked ? backend.liveWindows() : []
+            switch closeVerdict(isParked: parked, listed: live.contains(w), listQueryFailed: live.isEmpty) {
+            case .recheckLater:
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.closeRecheckDelay) { [weak self] in
                     guard let self, !self.backend.liveWindows().contains(w) else { return }
                     self.handle(.closed(w))
                 }
                 return
+            case let .closed(forgetLedger):
+                board.windowClosed(w)
+                runner?.forget(w)
+                // A failed list query (empty answer) keeps the ledger entry.
+                if forgetLedger { mover.forget(w) }
+                let capture = self.capture
+                Task { await capture.forget(w) }
             }
-            board.windowClosed(w)
-            runner?.forget(w)
-            // An empty answer means the query failed: keep the ledger entry.
-            if !live.isEmpty { mover.forget(w) }
-            let capture = self.capture
-            Task { await capture.forget(w) }
         case let .focused(w):
             // Parked windows count: Cmd-`, the Window menu, the Dock and Mission Control
             // focus them, and that must bring their stage forward. Minimized ones don't.
@@ -481,6 +488,17 @@ final class Coordinator {
     }
 
     private static let closeRecheckDelay: TimeInterval = 0.5
+
+    /// Puts back parked windows no stage owns: a previous run (or crash) parked them on
+    /// another Space, where AX couldn't reach them at launch, so recovery kept their entries.
+    /// Run on every Space switch; cheap when there are none, and unreachable entries stay.
+    private func recoverStrays() {
+        guard isRunning, !applying else { return }
+        let onBoard = Set(board.stages.flatMap(\.windows))
+        guard ledger.entries().contains(where: { !onBoard.contains($0.window) }) else { return }
+        NSLog("Podium: Space changed; retrying recovery of windows no stage owns")
+        mover.recover(visibleScreens: backend.visibleScreens(), only: { !onBoard.contains($0) })
+    }
 
     private func focusedWindow(of pid: pid_t) -> WindowRef? {
         AX.focusedWindow(of: pid).flatMap(AX.windowID(of:)).map { WindowRef(pid: pid, windowID: $0) }
