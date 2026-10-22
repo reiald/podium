@@ -259,9 +259,11 @@ final class Coordinator {
         apply(from: old)
     }
 
-    /// A strip thumbnail dragged onto the stage: its windows join the active stage.
+    /// A strip thumbnail dragged onto the stage: its windows join the active stage. On the
+    /// desktop there is nothing to join; the stage just comes on stage, as with a click.
     func combineIntoActive(stageID: UUID) {
         guard isRunning, !applying else { return }
+        guard board.activeStageID != nil else { return select(stageID: stageID) }
         let old = board
         board.combineIntoActive(stageID: stageID)
         apply(from: old)

@@ -1,4 +1,5 @@
 import AppKit
+import PodiumCore
 
 /// The only part of Podium's UI that takes the mouse: a clear, non-activating panel covering
 /// just the strip band. Everything is reported in top-left-origin global (AX) coordinates.
@@ -6,15 +7,19 @@ import AppKit
 /// It starts click-through; the `StripPresenter` turns mouse-taking on only while the pointer
 /// is over a target, so the band's empty space (and windows under it) still get clicks.
 ///
-/// `targets` maps stage IDs to their hit rects (AX coordinates). A press on a target that is
-/// released inside the band is a click (or shift-click); one released outside the band is a
-/// drag to the stage.
+/// `targets` maps stage IDs to their hit rects (AX coordinates). A press on a target is a
+/// click (or shift-click) until the pointer moves past `StripDrag`'s threshold; then it is a
+/// drag, reported as it goes, which drops on the stage if released outside the band.
 @MainActor
 final class StripPanel: NSPanel {
     var onClick: (UUID) -> Void = { _ in }
     var onShiftClick: (UUID) -> Void = { _ in }
     var onHover: (CGPoint?) -> Void = { _ in }
-    var onDragToStage: (UUID) -> Void = { _ in }
+    /// The pressed stage and the pointer, once the press became a drag.
+    var onDragBegan: (UUID, CGPoint) -> Void = { _, _ in }
+    var onDragMoved: (CGPoint) -> Void = { _ in }
+    /// The dragged stage, and whether it was dropped on the stage (else called off).
+    var onDragEnded: (UUID, Bool) -> Void = { _, _ in }
 
     var targets: [(id: UUID, frame: CGRect)] = []
 
@@ -66,6 +71,9 @@ final class StripPanel: NSPanel {
 private final class MouseCatcher: FlippedView {
     weak var panel: StripPanel?
     private var pressed: (id: UUID, shift: Bool)?
+    private var drag = StripDrag()
+    private var escapeMonitors: [Any] = []
+    private static let escapeKeyCode: UInt16 = 53
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -86,22 +94,76 @@ private final class MouseCatcher: FlippedView {
     override func mouseExited(with event: NSEvent) { panel?.onHover(nil) }
 
     override func mouseDown(with event: NSEvent) {
+        // A drag whose mouse-up was lost is called off before the new press.
+        if drag.isDragging, let pressed { end(pressed.id, dropped: false) }
+        drag.reset()
         guard let panel, let p = globalPoint(event), let id = panel.target(at: p) else {
             pressed = nil
             return
         }
         pressed = (id, event.modifierFlags.contains(.shift))
+        drag.began(at: p)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let panel, let pressed, let p = globalPoint(event) else { return }
+        switch drag.dragged(to: p) {
+        case .began:
+            watchEscape()
+            panel.onDragBegan(pressed.id, p)
+        case .moved:
+            panel.onDragMoved(p)
+        default:
+            break
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
         defer { pressed = nil }
         guard let panel, let pressed, let p = globalPoint(event) else { return }
-        if !panel.band.contains(p) {
-            panel.onDragToStage(pressed.id)
-        } else if pressed.shift {
-            panel.onShiftClick(pressed.id)
-        } else {
-            panel.onClick(pressed.id)
+        switch drag.released(at: p, inBand: panel.band.contains(p)) {
+        case .click:
+            if pressed.shift { panel.onShiftClick(pressed.id) } else { panel.onClick(pressed.id) }
+        case .drop:
+            end(pressed.id, dropped: true)
+        case .cancel:
+            end(pressed.id, dropped: false)
+        default:
+            break
         }
+    }
+
+    // MARK: - Esc
+
+    /// The panel never becomes key, so Esc reaches whichever app is active: a global monitor
+    /// sees it there, a local one if Podium is active. Both exist only during a drag.
+    private func watchEscape() {
+        stopWatchingEscape()
+        let escape: (NSEvent) -> Bool = { [weak self] event in
+            guard event.keyCode == Self.escapeKeyCode else { return false }
+            MainActor.assumeIsolated { self?.escapePressed() }
+            return true
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { _ = escape($0) }) {
+            escapeMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { escape($0) ? nil : $0 }) {
+            escapeMonitors.append(local)
+        }
+    }
+
+    private func stopWatchingEscape() {
+        escapeMonitors.forEach(NSEvent.removeMonitor)
+        escapeMonitors = []
+    }
+
+    private func escapePressed() {
+        guard let pressed, drag.escape() == .cancel else { return }
+        end(pressed.id, dropped: false)
+    }
+
+    private func end(_ id: UUID, dropped: Bool) {
+        stopWatchingEscape()
+        panel?.onDragEnded(id, dropped)
     }
 }

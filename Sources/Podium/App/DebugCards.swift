@@ -60,7 +60,7 @@ final class DebugCards {
         panel.targets = targets
         panel.onClick = { [weak self] id in self?.flip(only: id) }
         panel.onShiftClick = { [weak self] id in self?.flip(only: id) }
-        panel.onDragToStage = { [weak self] id in self?.flip(only: id) }
+        panel.onDragEnded = { [weak self] id, dropped in if dropped { self?.flip(only: id) } }
 
         overlay.show()
         panel.show()

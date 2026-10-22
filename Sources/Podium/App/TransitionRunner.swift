@@ -17,6 +17,9 @@ import struct PodiumCore.WindowRef
 ///   it settles the window is unparked, and two ticks later (the window has drawn) the card
 ///   is removed.
 ///
+/// A strip card being dragged (`beginDrag`) is left out of strip relayouts and follows the
+/// pointer; dropped, it enters from wherever it is, through the same path.
+///
 /// A window with no snapshot at all gets Task 9's instant move and no card: never a blank card.
 /// Every phase change bumps a per-window generation, so callbacks from an interrupted
 /// phase (fast repeated clicks retarget cards mid-flight) do nothing.
@@ -85,6 +88,11 @@ final class TransitionRunner {
     /// Frames to restore a window to instead of where it is when parked (drag-out).
     private var restoreFrames: [WindowRef: CGRect] = [:]
     private var icons: [pid_t: NSImage] = [:]
+    /// The strip card following the pointer: its window, its center minus the pointer, and
+    /// its pose when the drag began.
+    private var dragged: (w: WindowRef, grab: CGSize, start: CardPose)?
+    /// A dragged card grows by this factor once clear of the band.
+    private static let dragLift: CGFloat = 1.05
 
     /// Live thumbnail streams of windows with a visible strip card.
     private enum Live {
@@ -190,6 +198,47 @@ final class TransitionRunner {
             old.hide()
         }
         update(layout: layout)
+    }
+
+    // MARK: - Dragging
+
+    /// A strip stage's front card (only the front one of a pile) leaves its slot to follow
+    /// the pointer. No card (no snapshot): nothing to show; a drop still works.
+    func beginDrag(stageID: UUID, at pointer: CGPoint) {
+        endDrag(dropped: false)
+        guard let w = board().stages.first(where: { $0.id == stageID })?.windows.first,
+              let t = tracks[w], t.phase == .strip else { return }
+        animator.cancel(t.card)
+        setZ(t.card, Self.transitionZ)
+        let start = t.card.pose
+        dragged = (w, CGSize(width: start.center.x - pointer.x, height: start.center.y - pointer.y), start)
+    }
+
+    /// Puts the dragged card under the pointer, no spring: it grows a little and loses its
+    /// tilt as it leaves the band.
+    func dragTo(_ pointer: CGPoint) {
+        guard let d = dragged else { return }
+        guard let t = tracks[d.w], t.phase == .strip else {
+            // Gone, or entering some other way meanwhile: it is no longer ours to move.
+            dragged = nil
+            return
+        }
+        let band = stripBand(in: layout.screen, side: layout.side, tuning: layout.tuning)
+        let outside = layout.side == .left ? pointer.x - band.maxX : band.minX - pointer.x
+        let progress = min(1, max(0, outside / max(1, band.width)))
+        t.card.apply(CardPose(center: CGPoint(x: pointer.x + d.grab.width, y: pointer.y + d.grab.height),
+                              scale: d.start.scale * (1 + (Self.dragLift - 1) * progress),
+                              tilt: d.start.tilt * (1 - progress), alpha: d.start.alpha))
+    }
+
+    /// Called off, the card springs back to its slot. Dropped, the caller combines right
+    /// after; the card's next spring (entering, or back to its slot if nothing changed) starts
+    /// from where it is now.
+    func endDrag(dropped: Bool) {
+        guard let d = dragged else { return }
+        dragged = nil
+        logger.log("drag of \(d.w.windowID, privacy: .public) ended: \(dropped ? "dropped" : "cancelled", privacy: .public)")
+        relayoutStrip(spring: layout.tuning.transitionSpring)
     }
 
     // MARK: - Entering
@@ -473,7 +522,7 @@ final class TransitionRunner {
                     if visible && mover.isParked(w) && onlyStages == nil { fetchStripCard(w) }
                     continue
                 }
-                guard t.phase == .strip else { continue }
+                guard t.phase == .strip, w != dragged?.w else { continue }
                 t.card.side = layout.side
                 t.card.appIcon = index == 0 && showAppIcons ? icon(for: w.pid) : nil
                 setZ(t.card, CGFloat(layout.tuning.pileMaxWindows - index))

@@ -3,8 +3,8 @@ import PodiumCore
 // Carbon (via AppKit) also declares `WindowRef`; this scoped import makes it mean Podium's.
 import struct PodiumCore.WindowRef
 
-/// The strip's input side: the StripPanel's clicks and hover, auto-hide, and dragging a
-/// stage window's title bar into the band. It reads the board and tells the Coordinator
+/// The strip's input side: the StripPanel's clicks, hover and thumbnail drags, auto-hide,
+/// and dragging a stage window's title bar into the band. It reads the board and tells the Coordinator
 /// what the user asked for; the TransitionRunner draws.
 ///
 /// Nothing here makes AX calls: the poll and the mouse monitors run constantly, and an AX
@@ -36,6 +36,8 @@ final class StripPresenter {
     private var pollTick = 0
     private var stageFrames: [CGRect] = []
     private var monitors: [Any] = []
+    /// A strip thumbnail is being dragged: the strip must not hide under it.
+    private var isDraggingThumbnail = false
     /// Active-stage window frames at the last mouse-down (drag-out detection).
     private var framesAtMouseDown: [WindowRef: CGRect] = [:]
 
@@ -51,7 +53,12 @@ final class StripPresenter {
                                            tuning: runner.layout.tuning))
         panel.onClick = { [weak self] in self?.onSelect($0) }
         panel.onShiftClick = { [weak self] in self?.onShiftClick($0) }
-        panel.onDragToStage = { [weak self] in self?.onCombine($0) }
+        panel.onDragBegan = { [weak self] id, p in
+            self?.isDraggingThumbnail = true
+            self?.runner.beginDrag(stageID: id, at: p)
+        }
+        panel.onDragMoved = { [weak self] in self?.runner.dragTo($0) }
+        panel.onDragEnded = { [weak self] id, dropped in self?.dragEnded(id, dropped: dropped) }
         // The panel only sees the pointer while it takes the mouse; the pointer's real
         // position (read in `trackPointer`) drives hover either way, so no exit flicker.
         panel.onHover = { [weak self] _ in self?.trackPointer() }
@@ -149,7 +156,7 @@ final class StripPresenter {
             return i.isNull ? sum : sum + i.width * i.height
         }
         let overlap = area > 0 ? min(1, Double(covered / area)) : 0
-        guard autoHideEnabled else { return }
+        guard autoHideEnabled, !isDraggingThumbnail else { return }
         let wasHidden = autoHide.isHidden
         autoHide.update(overlapFraction: overlap, pointer: Self.pointer(), band: band,
                         screen: layout.screen, side: layout.side, now: ProcessInfo.processInfo.systemUptime)
@@ -181,6 +188,15 @@ final class StripPresenter {
             frames[w] = frame
         }
         return frames
+    }
+
+    // MARK: - Thumbnail drag
+
+    /// The card springs back or, dropped, enters from where it is as the stage combines.
+    private func dragEnded(_ id: UUID, dropped: Bool) {
+        isDraggingThumbnail = false
+        runner.endDrag(dropped: dropped)
+        if dropped { onCombine(id) }
     }
 
     // MARK: - Drag-out
