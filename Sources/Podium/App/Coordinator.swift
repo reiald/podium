@@ -106,6 +106,8 @@ final class Coordinator {
         presenter.onShiftClick = { [weak self] in self?.addFrontWindowToActive(stageID: $0) }
         presenter.onCombine = { [weak self] in self?.combineIntoActive(stageID: $0, dragged: $1) }
         presenter.onDragOut = { [weak self] in self?.dragOut($0, restoreTo: $1) }
+        presenter.onShowWindow = { [weak self] in self?.show(window: $0) }
+        presenter.onAddWindow = { [weak self] in self?.addToActive(window: $0) }
         self.presenter = presenter
         presenter.setAutoHideEnabled(autoHideEnabled)
         // Overlay (in the runner) and panel are shown now, not at the first transition.
@@ -278,6 +280,25 @@ final class Coordinator {
         } else {
             board.combineIntoActive(stageID: stageID)
         }
+        apply(from: old)
+        if old.activeStageID == nil { activateFrontApp() }
+    }
+
+    /// App view click: exactly `w` comes on stage (`StageBoard.show`).
+    func show(window w: WindowRef) {
+        guard isRunning, !applying, isOnBoard(w) else { return }
+        let old = board
+        board.show(w)
+        apply(from: old)
+        activateFrontApp()
+    }
+
+    /// App view shift-click or drop: exactly `w` joins the active stage (on the desktop it
+    /// comes on stage, as a click would).
+    func addToActive(window w: WindowRef) {
+        guard isRunning, !applying, isOnBoard(w) else { return }
+        let old = board
+        board.addToActiveStage(w)
         apply(from: old)
         if old.activeStageID == nil { activateFrontApp() }
     }

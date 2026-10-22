@@ -637,3 +637,40 @@ private func threeWindowsThenOther() -> StageBoard {
     #expect(b.activeStage?.windows == [w(2, 20)])
     #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 11), w(1, 10)]])
 }
+
+@Test func showOneAtATimeBringsExactlyThatWindowOnStageAlone() {
+    var b = threeWindowsThenOther()            // 20 on stage, pile [12, 11, 10]
+    b.appActivated(pid: 1)                     // 12 on stage, pile [11, 10]
+    b.show(w(1, 10))
+    #expect(b.activeStage?.windows == [w(1, 10)])
+    #expect(b.stripStages.contains { $0.windows == [w(1, 12), w(1, 11)] })
+    // Out of a manual combine: only it comes, the rest of that stage stays in the strip.
+    b.windowFocused(w(2, 20))
+    b.addToActiveStage(w(1, 10))               // 20 + 10 on stage
+    b.windowFocused(w(1, 11))                  // 11 on stage; [20] alone, 10 in the pile
+    b.addToActiveStage(w(2, 20))               // 11 + 20 on stage
+    b.show(w(1, 12))
+    #expect(b.activeStage?.windows == [w(1, 12)])
+    #expect(b.stripStages.contains { $0.windows == [w(2, 20)] })
+    #expect(Set(b.stages.flatMap(\.windows)) == [w(1, 10), w(1, 11), w(1, 12), w(2, 20)])
+}
+
+@Test func showAllAtOnceActivatesStageWithWindowInFront() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))                   // 11 front, 10 behind
+    let first = b.activeStageID!
+    b.windowOpened(w(2, 20))
+    b.show(w(1, 10))
+    #expect(b.activeStageID == first)
+    #expect(b.activeStage?.windows == [w(1, 10), w(1, 11)])
+}
+
+@Test func showIsNoOpForDockedOrUnknownWindow() {
+    var b = threeWindowsThenOther()
+    b.minimize(w(1, 11))
+    let before = b
+    b.show(w(1, 11))
+    b.show(w(9, 90))
+    #expect(b == before)
+}

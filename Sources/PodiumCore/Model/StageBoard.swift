@@ -183,6 +183,19 @@ public struct StageBoard: Equatable, Sendable {
         if let front = activeStage?.windows.first { windowFocused(front) }
     }
 
+    /// App view click: brings exactly `w` on stage. One at a Time it comes on stage alone,
+    /// as from a pile (the app's windows that were on stage join its pile at the front); All
+    /// at Once its stage becomes active with `w` in front. No-op for a window in the Dock.
+    public mutating func show(_ w: WindowRef) {
+        guard let i = stageIndex(of: w), !minimized.contains(w) else { return }
+        if grouping == .oneAtATime, stages[i].id != activeStageID {
+            touch(w)
+            bringOnStageAlone(w, displacedToBack: false)
+            return
+        }
+        windowFocused(w)
+    }
+
     /// Switches the grouping and restructures the board to match. To One at a Time: the
     /// active stage keeps each app's most recent window; the app's other windows join its
     /// pile. To All at Once: the piles of apps on the active stage rejoin it.
@@ -316,6 +329,11 @@ public struct StageBoard: Equatable, Sendable {
         stages.append(stage)
         mru.insert(stage.id, at: 0)
         mergePiles()
+    }
+
+    /// Focus counter of `w`: higher was focused more recently, 0 never.
+    func lastFocus(of w: WindowRef) -> Int {
+        focusTick[w] ?? 0
     }
 
     // MARK: Helpers

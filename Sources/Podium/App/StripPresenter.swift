@@ -1,4 +1,5 @@
 import AppKit
+import os
 import PodiumCore
 // Carbon (via AppKit) also declares `WindowRef`; this scoped import makes it mean Podium's.
 import struct PodiumCore.WindowRef
@@ -10,6 +11,12 @@ import struct PodiumCore.WindowRef
 /// Nothing here makes AX calls: the poll and the mouse monitors run constantly, and an AX
 /// call to a hung app blocks the main thread (and every animation) for up to a second.
 /// Window frames come from the window server's list instead.
+///
+/// An item's app icon opens the app view: the strip lists only that app's off-stage windows,
+/// one per item (`TransitionRunner.setAppView`). Clicking one brings exactly that window on
+/// stage; a shift-click or drop adds it to the stage. The view closes on Esc, the icon again,
+/// a click outside the strip, the app running out of off-stage windows (or quitting), and
+/// any board change that brings more of the app's windows on stage.
 @MainActor
 final class StripPresenter {
     var onSelect: (UUID) -> Void = { _ in }
@@ -19,6 +26,10 @@ final class StripPresenter {
     var onCombine: (UUID, WindowRef?) -> Void = { _, _ in }
     /// The dragged window and its frame before the drag.
     var onDragOut: (WindowRef, CGRect) -> Void = { _, _ in }
+    /// App view click: exactly this window on stage.
+    var onShowWindow: (WindowRef) -> Void = { _ in }
+    /// App view shift-click or drop: this window joins the stage.
+    var onAddWindow: (WindowRef) -> Void = { _ in }
 
     private static let pollInterval = 1.0 / 30.0
     /// Overlap frames are re-read every this many polls (30 Hz / 3 = 10 Hz).
@@ -48,6 +59,12 @@ final class StripPresenter {
     private static let lostMouseUpDelay: TimeInterval = 0.25
     /// Active-stage window frames at the last mouse-down (drag-out detection).
     private var framesAtMouseDown: [WindowRef: CGRect] = [:]
+    /// While the app view is open: the app's windows on the active stage (more closes it).
+    private var appViewOnStage: Set<WindowRef> = []
+    /// Esc monitors, only while the app view is open.
+    private var escapeMonitors: [Any] = []
+    private static let escapeKeyCode: UInt16 = 53
+    private let logger = Logger(subsystem: "dev.podium.Podium", category: "strip")
 
     private var layout: TransitionRunner.Layout { runner.layout }
     private var band: CGRect { stripBand(in: layout.screen, side: layout.side, tuning: layout.tuning) }
@@ -59,12 +76,14 @@ final class StripPresenter {
         autoHide = AutoHide(tuning: runner.layout.tuning)
         panel = StripPanel(band: stripBand(in: runner.layout.screen, side: runner.layout.side,
                                            tuning: runner.layout.tuning))
-        panel.onClick = { [weak self] in self?.onSelect($0) }
-        panel.onShiftClick = { [weak self] in self?.onShiftClick($0) }
+        panel.onClick = { [weak self] in self?.clicked($0, shift: false) }
+        panel.onShiftClick = { [weak self] in self?.clicked($0, shift: true) }
+        panel.onIconClick = { [weak self] in self?.iconClicked($0) }
+        panel.iconTarget = { [weak runner] in runner?.iconTarget(at: $0) }
         panel.onDragBegan = { [weak self] id, p in
             guard let self else { return }
             self.isDraggingThumbnail = true
-            self.draggedWindow = self.board().stages.first { $0.id == id }?.windows.first
+            self.draggedWindow = self.runner.stripStages().first { $0.id == id }?.windows.first
             self.runner.beginDrag(stageID: id, at: p)
         }
         panel.onDragMoved = { [weak self] in self?.runner.dragTo($0) }
@@ -95,6 +114,7 @@ final class StripPresenter {
     }
 
     func stop() {
+        closeAppView(reason: "stop")
         panel.cancelDrag()
         pollTimer?.invalidate()
         pollTimer = nil
@@ -105,6 +125,7 @@ final class StripPresenter {
 
     /// The board or the layout changed: new hit targets, band and hover.
     func boardChanged() {
+        checkAppView()
         if panel.band != band { panel.setBand(band) }
         panel.targets = slots().map { ($0.stageID, $0.frame) }
         updateMouseTaking()
@@ -112,7 +133,7 @@ final class StripPresenter {
     }
 
     private func slots() -> [StripSlot] {
-        stripSlots(for: board().visibleStripStages, in: layout.screen, side: layout.side, tuning: layout.tuning)
+        stripSlots(for: runner.stripStages(), in: layout.screen, side: layout.side, tuning: layout.tuning)
     }
 
     private func updateHover() {
@@ -139,7 +160,8 @@ final class StripPresenter {
         let p = pointer ?? Self.pointer()
         // Mid-press, whoever got the mouse-down keeps the mouse until it is released.
         guard NSEvent.pressedMouseButtons == 0 else { return }
-        let overTarget = !runner.isHidden && panel.targets.contains { $0.frame.contains(p) }
+        let overTarget = !runner.isHidden
+            && (panel.targets.contains { $0.frame.contains(p) } || runner.iconTarget(at: p) != nil)
         if panel.ignoresMouseEvents == overTarget { panel.ignoresMouseEvents = !overTarget }
     }
 
@@ -211,7 +233,12 @@ final class StripPresenter {
         draggedWindow = nil
         releasedSince = nil
         runner.endDrag(dropped: dropped)
-        if dropped { onCombine(id, w) }
+        guard dropped else { return }
+        if runner.appView != nil {
+            if let w { onAddWindow(w) }
+        } else {
+            onCombine(id, w)
+        }
     }
 
     /// Mission Control or a screen lock can eat the mouse-up, leaving the drag open (card
@@ -231,6 +258,8 @@ final class StripPresenter {
     // MARK: - Drag-out
 
     private func mouseDown() {
+        // Another app got the click: it was outside the strip's items.
+        closeAppView(reason: "click outside")
         framesAtMouseDown = activeStageFrames()
     }
 
@@ -249,6 +278,81 @@ final class StripPresenter {
         }
         guard moved.count == 1, let (w, before) = moved.first else { return }
         onDragOut(w, before)
+    }
+
+    // MARK: - App view
+
+    /// In the app view an item is one window: a click shows exactly it, a shift-click adds it.
+    private func clicked(_ id: UUID, shift: Bool) {
+        guard runner.appView != nil else { return shift ? onShiftClick(id) : onSelect(id) }
+        guard let w = runner.stripStages().first(where: { $0.id == id })?.windows.first else { return }
+        if shift {
+            onAddWindow(w)
+        } else {
+            closeAppView(reason: "window chosen")
+            onShowWindow(w)
+        }
+    }
+
+    /// Opens the app view of the item's front app; with one off-stage window it is just a
+    /// click on the item. A second icon click closes it.
+    private func iconClicked(_ id: UUID) {
+        guard runner.appView == nil else { return closeAppView(reason: "icon clicked again") }
+        let b = board()
+        guard let pid = runner.stripStages().first(where: { $0.id == id })?.windows.first?.pid else { return }
+        guard appWindowItems(board: b, pid: pid).count > 1 else { return onSelect(id) }
+        appViewOnStage = appWindowsOnStage(pid, b)
+        runner.setAppView(pid: pid, anchor: slots().first { $0.stageID == id })
+        watchEscape()
+        boardChanged()
+    }
+
+    /// Closes the app view once the app has no off-stage window left or more of its
+    /// windows came on stage.
+    private func checkAppView() {
+        guard let pid = runner.appView?.pid else { return }
+        let b = board()
+        let onStage = appWindowsOnStage(pid, b)
+        if appWindowItems(board: b, pid: pid).isEmpty {
+            closeAppView(reason: "no off-stage windows")
+        } else if !onStage.isSubset(of: appViewOnStage) {
+            closeAppView(reason: "app came on stage")
+        } else {
+            appViewOnStage = onStage
+        }
+    }
+
+    private func appWindowsOnStage(_ pid: pid_t, _ b: StageBoard) -> Set<WindowRef> {
+        Set((b.activeStage?.windows ?? []).filter { $0.pid == pid })
+    }
+
+    private func closeAppView(reason: String) {
+        guard runner.appView != nil else { return }
+        logger.log("closing app view: \(reason, privacy: .public)")
+        escapeMonitors.forEach(NSEvent.removeMonitor)
+        escapeMonitors = []
+        appViewOnStage = []
+        runner.setAppView(pid: nil)
+        boardChanged()
+    }
+
+    /// The panel never becomes key, so Esc reaches whichever app is active: a global monitor
+    /// sees it there, a local one if Podium is active.
+    private func watchEscape() {
+        let escape: (NSEvent) -> Bool = { [weak self] event in
+            guard event.keyCode == Self.escapeKeyCode else { return false }
+            return MainActor.assumeIsolated {
+                guard let self, self.runner.appView != nil else { return false }
+                self.closeAppView(reason: "Esc")
+                return true
+            }
+        }
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { _ = escape($0) }) {
+            escapeMonitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { escape($0) ? nil : $0 }) {
+            escapeMonitors.append(local)
+        }
     }
 
     /// The pointer in AX (top-left-origin) coordinates.

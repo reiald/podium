@@ -14,7 +14,8 @@ func flipToAppKit(_ rect: CGRect) -> CGRect {
 }
 
 /// One click-through, borderless window covering a whole display. Cards are added to its
-/// flipped root layer. `frame` is in AX coordinates, and cards take poses in AX coordinates too.
+/// flipped root layer, each with its app icon layer. `frame` is in AX coordinates, and cards
+/// take poses in AX coordinates too.
 @MainActor
 final class Overlay {
     let screen: NSScreen
@@ -52,6 +53,7 @@ final class Overlay {
         CATransaction.setDisableActions(true)
         card.layerOrigin = frame.origin
         root.layer?.addSublayer(card.layer)
+        root.layer?.addSublayer(card.iconLayer)
         CATransaction.commit()
     }
 
@@ -59,6 +61,7 @@ final class Overlay {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         card.layer.removeFromSuperlayer()
+        card.iconLayer.removeFromSuperlayer()
         CATransaction.commit()
     }
 }

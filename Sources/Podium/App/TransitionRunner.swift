@@ -20,6 +20,10 @@ import struct PodiumCore.WindowRef
 /// A strip card being dragged (`beginDrag`) is left out of strip relayouts and follows the
 /// pointer; dropped, it enters from wherever it is, through the same path.
 ///
+/// The app view (`setAppView`) lays out an app's off-stage windows, one per item, in place
+/// of the board's strip stages. Cards stay keyed by window, so a window's card just moves
+/// between the two; strip cards with no place in the app view fade out where they are.
+///
 /// A window with no snapshot at all gets Task 9's instant move and no card: never a blank card.
 /// Every phase change bumps a per-window generation, so callbacks from an interrupted
 /// phase (fast repeated clicks retarget cards mid-flight) do nothing.
@@ -88,6 +92,11 @@ final class TransitionRunner {
     /// Frames to restore a window to instead of where it is when parked (drag-out).
     private var restoreFrames: [WindowRef: CGRect] = [:]
     private var icons: [pid_t: NSImage] = [:]
+    /// Strip cards showing their app icon, and the strip stage each one stands for.
+    private var iconStages: [WindowRef: UUID] = [:]
+    /// The app view: the strip shows this app's off-stage windows (`appWindowItems`), and
+    /// cards that appear for it fan out from `anchor`, the item whose icon was clicked.
+    private(set) var appView: (pid: pid_t, anchor: StripSlot?)?
     /// The strip card following the pointer: its window, its center minus the pointer, and
     /// its pose when the drag began.
     private var dragged: (w: WindowRef, grab: CGSize, start: CardPose)?
@@ -152,6 +161,33 @@ final class TransitionRunner {
         relayoutStrip(spring: layout.tuning.hoverSpring, onlyStages: changed)
     }
 
+    /// Opens (a pid) or closes (nil) the app view; every strip card retargets.
+    func setAppView(pid: pid_t?, anchor: StripSlot? = nil) {
+        appView = pid.map { ($0, anchor) }
+        logger.log("app view \(pid.map { "of pid \($0)" } ?? "closed", privacy: .public)")
+        relayoutStrip(spring: layout.tuning.transitionSpring)
+    }
+
+    /// What the strip shows, most recently used first: the board's strip stages, or the
+    /// app view's items.
+    func stripStages() -> [Stage] {
+        stripStages(of: board())
+    }
+
+    private func stripStages(of b: StageBoard) -> [Stage] {
+        guard let appView else { return b.visibleStripStages }
+        return appWindowItems(board: b, pid: appView.pid)
+    }
+
+    /// The strip stage whose app icon is under `p` (AX coordinates), where it is drawn now.
+    func iconTarget(at p: CGPoint) -> UUID? {
+        guard !isHidden else { return nil }
+        return iconStages.first { w, _ in
+            guard let t = tracks[w], t.phase == .strip, w != dragged?.w else { return false }
+            return t.card.iconFrame?.contains(p) == true
+        }?.value
+    }
+
     func setHidden(_ hidden: Bool) {
         guard hidden != isHidden else { return }
         isHidden = hidden
@@ -206,7 +242,7 @@ final class TransitionRunner {
     /// the pointer. No card (no snapshot): nothing to show; a drop still works.
     func beginDrag(stageID: UUID, at pointer: CGPoint) {
         endDrag(dropped: false)
-        guard let w = board().stages.first(where: { $0.id == stageID })?.windows.first,
+        guard let w = stripStages().first(where: { $0.id == stageID })?.windows.first,
               let t = tracks[w], t.phase == .strip else { return }
         animator.cancel(t.card)
         setZ(t.card, Self.transitionZ)
@@ -509,7 +545,7 @@ final class TransitionRunner {
             for w in active.windows where tracks[w]?.phase == .strip { enter(w) }
         }
 
-        let stages = b.visibleStripStages
+        let stages = stripStages(of: b)
         let slots = stripSlots(for: stages, in: layout.screen, side: layout.side, tuning: layout.tuning)
         if onlyStages == nil { lastPlacement = [:] }
         for stage in stages where onlyStages?.contains(stage.id) ?? true {
@@ -525,6 +561,7 @@ final class TransitionRunner {
                 guard t.phase == .strip, w != dragged?.w else { continue }
                 t.card.side = layout.side
                 t.card.appIcon = index == 0 && showAppIcons ? icon(for: w.pid) : nil
+                iconStages[w] = t.card.appIcon == nil ? nil : stage.id
                 setZ(t.card, CGFloat(layout.tuning.pileMaxWindows - index))
                 animator.drive(t.card, to: stripPose(card: t.card, slot: slot, stage: stage, index: index),
                                spring: spring)
@@ -539,11 +576,21 @@ final class TransitionRunner {
                 }
             }
         }
+        if onlyStages == nil {
+            // Strip cards the strip no longer lists (the app view hides the rest) fade out
+            // where they are, kept for when it lists them again.
+            for (w, t) in tracks where t.phase == .strip && w != dragged?.w && lastPlacement[w] == nil {
+                iconStages[w] = nil
+                var pose = t.card.pose
+                pose.alpha = 0
+                animator.drive(t.card, to: pose, spring: spring)
+            }
+        }
         syncLive()
     }
 
     private func isVisibleInStrip(_ w: WindowRef) -> Bool {
-        let stages = board().visibleStripStages
+        let stages = stripStages()
         guard let row = stages.firstIndex(where: { $0.windows.contains(w) }),
               let index = stages[row].windows.firstIndex(of: w) else { return false }
         return row < layout.tuning.maxRowCount && index < layout.tuning.pileMaxWindows
@@ -588,11 +635,13 @@ final class TransitionRunner {
             guard let self else { return }
             self.fetching.remove(w)
             guard let image, self.tracks[w] == nil, self.mover.isParked(w), self.isVisibleInStrip(w),
-                  let stage = self.board().visibleStripStages.first(where: { $0.windows.contains(w) }) else { return }
+                  let stage = self.stripStages().first(where: { $0.windows.contains(w) }) else { return }
             let card = self.makeCard(image: image, pointWidth: self.originalFrame(of: w)?.width)
-            let slots = stripSlots(for: self.board().visibleStripStages, in: self.layout.screen,
+            let slots = stripSlots(for: self.stripStages(), in: self.layout.screen,
                                    side: self.layout.side, tuning: self.layout.tuning)
-            var start = self.stripPose(card: card, slot: slots.first { $0.stageID == stage.id }, stage: stage,
+            // In the app view, new cards fan out from the clicked item.
+            let slot = self.appView?.anchor ?? slots.first { $0.stageID == stage.id }
+            var start = self.stripPose(card: card, slot: slot, stage: stage,
                                        index: stage.windows.firstIndex(of: w) ?? 0)
             start.alpha = 0
             card.apply(start)
@@ -730,14 +779,12 @@ final class TransitionRunner {
     }
 
     private func setZ(_ card: WindowCard, _ z: CGFloat) {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        card.layer.zPosition = z
-        CATransaction.commit()
+        card.zPosition = z
     }
 
     private func drop(_ w: WindowRef) {
         pendingLeave[w] = nil
+        iconStages[w] = nil
         stopLive(w)
         guard let t = tracks.removeValue(forKey: w) else { return }
         animator.cancel(t.card)
