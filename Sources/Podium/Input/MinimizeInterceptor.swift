@@ -8,7 +8,8 @@ import struct PodiumCore.WindowRef
 /// Catches the yellow button and Cmd-M before the app sees them, so a managed window can
 /// fly into the strip instead of the Dock (`onIntercept`, called on the main thread). With
 /// the Dock-click setting on, a plain click on the frontmost app's Dock icon sends that app's
-/// on-stage windows to the strip (`onDockClick`).
+/// on-stage windows to the strip (`onDockClick`). That press is swallowed but decided only
+/// when it ends (`DockPress`): a drag or press-and-hold is replayed to the Dock untouched.
 ///
 /// An event tap sits in front of all system input, so it is deliberately timid: anything
 /// it is not sure about (a slow or failed AX hit-test, a modifier, an unmanaged window, a
@@ -29,6 +30,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
         /// The frontmost app and its bundle.
         var frontmostPid: pid_t?
         var frontmostURL: URL?
+        var frontmostBundleID: String?
     }
 
     private let onIntercept: @MainActor (WindowRef) -> Void
@@ -59,6 +61,16 @@ final class MinimizeInterceptor: @unchecked Sendable {
     private var swallowedMouseDown = false
     /// Physical key of the last swallowed Cmd-M; its autorepeats are swallowed too.
     private var swallowedKeyCode: Int64?
+    /// The swallowed press on the frontmost app's Dock icon, until it is a click or replayed.
+    private var dockPress = DockPress()
+    /// That press's app and mouse-down (re-posted if it turns out not to be a click).
+    private var dockPressPid: pid_t?
+    private var dockPressDown: CGEvent?
+    /// Replays the press once it is held for `DockPress.holdTime` (the Dock's icon menu).
+    private var dockHoldTimer: CFRunLoopTimer?
+
+    /// Marks events Podium re-posts (`eventSourceUserData`), so the tap never touches them.
+    private static let replayTag: Int64 = 0x506F_6469_756D   // "Podium"
 
     /// Upper bound on an AX call made inside the callback.
     static let hitTestTimeout: Float = 0.05
@@ -189,7 +201,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
         AXUIElementSetMessagingTimeout(systemWide, Self.hitTestTimeout)
         self.systemWide = systemWide
         let mask = (1 << CGEventType.leftMouseDown.rawValue) | (1 << CGEventType.leftMouseUp.rawValue)
-            | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.leftMouseDragged.rawValue) | (1 << CGEventType.keyDown.rawValue)
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap,
                                           options: .defaultTap, eventsOfInterest: CGEventMask(mask),
                                           callback: Self.callback,
@@ -210,6 +222,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
 
         CFRunLoopRun()
 
+        endDockPress()
         CGEvent.tapEnable(tap: tap, enable: false)
         CFRunLoopRemoveSource(runLoop, source, .defaultMode)
         CFMachPortInvalidate(tap)
@@ -227,20 +240,29 @@ final class MinimizeInterceptor: @unchecked Sendable {
     private enum Outcome {
         case pass, swallow
         case intercept(WindowRef)
-        case dockClick(pid_t)
+        /// A press on the frontmost app's Dock icon began (swallowed, decided later).
+        case dockPress(pid_t)
     }
 
     /// True to swallow the event.
     private func handle(_ type: CGEventType, _ event: CGEvent) -> Bool {
+        if type != .tapDisabledByTimeout, type != .tapDisabledByUserInput,
+           event.getIntegerValueField(.eventSourceUserData) == Self.replayTag { return false }
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
             NSLog("Podium: minimize tap disabled (%u); re-enabling, passing through until healthy", type.rawValue)
             healthy = false
             swallowedMouseDown = false
             swallowedKeyCode = nil
+            dockPress.reset()
+            endDockPress()
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return false
+        case .leftMouseDragged:
+            return dockPressStep(dockPress.dragged(to: event.location, time: CACurrentMediaTime()), event)
         case .leftMouseUp:
+            let step = dockPress.released(at: event.location, time: CACurrentMediaTime())
+            if step != .pass { return dockPressStep(step, event) }
             // Only the partner of a swallowed mouse-down; never any other mouse-up.
             let swallow = swallowedMouseDown
             swallowedMouseDown = false
@@ -264,9 +286,8 @@ final class MinimizeInterceptor: @unchecked Sendable {
                 let onIntercept = self.onIntercept
                 DispatchQueue.main.async { MainActor.assumeIsolated { onIntercept(w) } }
                 return true
-            case let .dockClick(pid):
-                let onDockClick = self.onDockClick
-                DispatchQueue.main.async { MainActor.assumeIsolated { onDockClick(pid) } }
+            case let .dockPress(pid):
+                beginDockPress(event, pid: pid)
                 return true
             }
         default:
@@ -278,18 +299,28 @@ final class MinimizeInterceptor: @unchecked Sendable {
     private func mouseDown(_ event: CGEvent, _ s: State, tapHealthy: Bool) -> Outcome {
         // A new press ends any earlier pair (its mouse-up may have been lost).
         swallowedMouseDown = false
+        dockPress.reset()
+        endDockPress()
         let modifiers = Self.modifiers(event.flags)
         if modifiers == .option { lastMinimizeAllGesture.withLock { $0 = CACurrentMediaTime() } }
-        if let outcome = dockClick(event, s, modifiers: modifiers, tapHealthy: tapHealthy) { return outcome }
+        var dockHit: AXUIElement?
+        switch dockClick(event, s, modifiers: modifiers, tapHealthy: tapHealthy) {
+        case .notInDock: break
+        case let .notDockItem(element): dockHit = element
+        case let .decided(outcome): return outcome
+        }
         // Skip the hit-test when nothing could be intercepted anyway.
         guard s.enabled, !s.managed.isEmpty, let systemWide,
               decideMinimize(.mouseDown(subrole: "AXMinimizeButton", modifiers: modifiers), behavior: s.behavior,
                              tapHealthy: tapHealthy, frontWindowManaged: true) == .intercept else { return .pass }
         let p = event.location
-        var hit: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success,
-              let button = hit else { return .pass }
-        AXUIElementSetMessagingTimeout(button, Self.hitTestTimeout)
+        // The Dock check may already have hit-tested this point (a window under the Dock's slack).
+        var hit = dockHit
+        if hit == nil {
+            guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success else { return .pass }
+            if let hit { AXUIElementSetMessagingTimeout(hit, Self.hitTestTimeout) }
+        }
+        guard let button = hit else { return .pass }
         let subrole = AX.string(kAXSubroleAttribute, of: button)
         // A disabled button does nothing in the app either; a failed read counts as disabled.
         guard subrole == "AXMinimizeButton", AX.bool(kAXEnabledAttribute, of: button),
@@ -302,28 +333,88 @@ final class MinimizeInterceptor: @unchecked Sendable {
         return .intercept(ref)
     }
 
-    /// A click inside the Dock's icon area, when the Dock-click setting could apply: intercepts
-    /// a plain click on the frontmost app's own icon, passes anything else. Nil (not a Dock
-    /// click) everywhere else, without any AX work.
-    private func dockClick(_ event: CGEvent, _ s: State, modifiers: ModifierSet, tapHealthy: Bool) -> Outcome? {
+    private enum DockHit {
+        /// Outside the Dock's icon area, or the setting can't apply: no AX work was done.
+        case notInDock
+        /// Hit-tested, but not a Dock item (e.g. a window under the area's slack).
+        case notDockItem(AXUIElement)
+        case decided(Outcome)
+    }
+
+    /// A press inside the Dock's icon area, when the Dock-click setting could apply: a plain
+    /// press on the frontmost app's own icon starts a `DockPress`; any other item passes.
+    private func dockClick(_ event: CGEvent, _ s: State, modifiers: ModifierSet, tapHealthy: Bool) -> DockHit {
         let p = event.location
         guard s.dockClickEnabled, modifiers.isEmpty, tapHealthy, let pid = s.frontmostPid,
               let front = s.frontmostURL, let systemWide, s.managed.contains(where: { $0.pid == pid }),
-              dockGate.withLock({ $0?.contains(p) }) == true else { return nil }
+              dockGate.withLock({ $0?.contains(p) }) == true else { return .notInDock }
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success,
-              let item = hit else { return .pass }
+              let item = hit else { return .decided(.pass) }
         AXUIElementSetMessagingTimeout(item, Self.hitTestTimeout)
         let role = AX.string(kAXRoleAttribute, of: item)
-        // Only a Dock item is worth the remaining reads; a window under the gate falls through.
-        guard role == "AXDockItem" else { return nil }
+        // Only a Dock item is worth the remaining reads.
+        guard role == "AXDockItem" else { return .notDockItem(item) }
         let click = DockClick(modifiers: modifiers, role: role, subrole: AX.string(kAXSubroleAttribute, of: item),
                               itemURL: Self.url(kAXURLAttribute, of: item))
         guard decideDockClick(click, enabled: s.dockClickEnabled, tapHealthy: tapHealthy, frontmostAppURL: front,
-                              frontmostAppHasWindowOnStage: s.managed.contains { $0.pid == pid }) == .intercept
-        else { return .pass }
-        swallowedMouseDown = true
-        return .dockClick(pid)
+                              frontmostBundleID: s.frontmostBundleID,
+                              frontmostAppHasWindowOnStage: s.managed.contains { $0.pid == pid },
+                              bundleIdentifier: { Bundle(url: $0)?.bundleIdentifier }) == .intercept
+        else { return .decided(.pass) }
+        return .decided(.dockPress(pid))
+    }
+
+    // MARK: - Dock press
+
+    /// The mouse-down was swallowed: keep it, and replay it if the press is held.
+    private func beginDockPress(_ down: CGEvent, pid: pid_t) {
+        dockPressDown = down.copy()
+        dockPressPid = pid
+        dockPress.began(at: down.location, time: CACurrentMediaTime())
+        let timer = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + DockPress.holdTime,
+                                                    0, 0, 0) { [weak self] _ in
+            guard let self else { return }
+            _ = self.dockPressStep(self.dockPress.holdElapsed(), nil)
+        }
+        CFRunLoopAddTimer(CFRunLoopGetCurrent(), timer, .defaultMode)
+        dockHoldTimer = timer
+    }
+
+    /// Applies a `DockPress` step to `event` (nil: the hold timer fired). True to swallow it.
+    private func dockPressStep(_ step: DockPress.Step, _ event: CGEvent?) -> Bool {
+        switch step {
+        case .pass:
+            return false
+        case .swallow:
+            return true
+        case .act:
+            let pid = dockPressPid
+            endDockPress()
+            if let pid {
+                let onDockClick = self.onDockClick
+                DispatchQueue.main.async { MainActor.assumeIsolated { onDockClick(pid) } }
+            }
+            return true
+        case .replay:
+            // The Dock gets the press after all: the saved mouse-down, then this event, in
+            // that order and past this tap; the rest of the gesture passes through.
+            let down = dockPressDown
+            endDockPress()
+            for e in [down, event?.copy()].compactMap({ $0 }) {
+                e.setIntegerValueField(.eventSourceUserData, value: Self.replayTag)
+                e.post(tap: .cgAnnotatedSessionEventTap)
+            }
+            return event != nil
+        }
+    }
+
+    /// Forgets the saved mouse-down and stops the hold timer.
+    private func endDockPress() {
+        if let t = dockHoldTimer { CFRunLoopTimerInvalidate(t) }
+        dockHoldTimer = nil
+        dockPressDown = nil
+        dockPressPid = nil
     }
 
     /// Intercepts Cmd-M (by the character typed, so any keyboard layout) on a managed

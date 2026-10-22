@@ -192,3 +192,40 @@ import Foundation
         #expect(dockClickGate(listFrame: CGRect(x: 0, y: 0, width: 10, height: 10), screens: []) == nil)
     }
 }
+
+@Suite struct DockClickBundleMatchTests {
+    let click = DockClick(modifiers: [], role: "AXDockItem", subrole: "AXApplicationDockItem",
+                          itemURL: URL(fileURLWithPath: "/Users/me/Downloads/Tool.app"))
+
+    @Test func translocatedAppMatchesByBundleIdentifier() {
+        let running = URL(fileURLWithPath: "/private/var/folders/xy/AppTranslocation/ABC/d/Tool.app")
+        let d = decideDockClick(click, enabled: true, tapHealthy: true, frontmostAppURL: running,
+                                frontmostBundleID: "com.example.tool", frontmostAppHasWindowOnStage: true,
+                                bundleIdentifier: { _ in "com.example.tool" })
+        #expect(d == .intercept)
+    }
+
+    @Test func differentBundleIdentifierPasses() {
+        let other = URL(fileURLWithPath: "/Applications/Other.app")
+        let d = decideDockClick(click, enabled: true, tapHealthy: true, frontmostAppURL: other,
+                                frontmostBundleID: "com.example.other", frontmostAppHasWindowOnStage: true,
+                                bundleIdentifier: { _ in "com.example.tool" })
+        #expect(d == .passThrough)
+        // No identifier on either side: never a match.
+        #expect(decideDockClick(click, enabled: true, tapHealthy: true, frontmostAppURL: other,
+                                frontmostBundleID: nil, frontmostAppHasWindowOnStage: true,
+                                bundleIdentifier: { _ in nil }) == .passThrough)
+    }
+
+    @Test func symlinkedPathMatches() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("podium-dock-\(UUID().uuidString)")
+        let real = dir.appendingPathComponent("Real.app")
+        let link = dir.appendingPathComponent("Link.app")
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let c = DockClick(modifiers: [], role: "AXDockItem", subrole: "AXApplicationDockItem", itemURL: link)
+        #expect(decideDockClick(c, enabled: true, tapHealthy: true, frontmostAppURL: real,
+                                frontmostAppHasWindowOnStage: true) == .intercept)
+    }
+}

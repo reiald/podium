@@ -170,6 +170,17 @@ final class Coordinator {
         observe(NSWorkspace.shared.notificationCenter, NSWorkspace.activeSpaceDidChangeNotification) { [weak self] in
             self?.recoverStrays()
         }
+        // The tap's frontmost app must follow every activation, Podium's own included (the
+        // window observer drops those).
+        observe(NSWorkspace.shared.notificationCenter, NSWorkspace.didActivateApplicationNotification) { [weak self] in
+            self?.publishMinimizeState()
+        }
+        observe(NotificationCenter.default, NSApplication.didBecomeActiveNotification) { [weak self] in
+            self?.publishMinimizeState()
+        }
+        observe(NotificationCenter.default, NSApplication.didResignActiveNotification) { [weak self] in
+            self?.publishMinimizeState()
+        }
         if !CGPreflightScreenCaptureAccess() {
             // Shows the system prompt once; capture starts working after a relaunch.
             CGRequestScreenCaptureAccess()
@@ -324,7 +335,9 @@ final class Coordinator {
     /// False (nothing changed) if it no longer applies; the caller then does the stock click.
     @discardableResult
     func minimizeAppToStrip(pid: pid_t) -> Bool {
-        guard !applying, isRunning,
+        // The tap decided on a published snapshot; the app must still be frontmost now (a
+        // click meant to switch back to it, from Podium say, must activate it instead).
+        guard !applying, isRunning, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
               let leaving = board.activeStage?.windows.first(where: { $0.pid == pid && canMinimizeToStrip($0) }) else {
             NSLog("Podium: Dock-click minimize of pid %d no longer applies; activating it instead", pid)
             return false
@@ -398,10 +411,12 @@ final class Coordinator {
     private func publishMinimizeState() {
         guard let interceptor else { return }
         let managed = isRunning ? Set((board.activeStage?.windows ?? []).filter(canMinimizeToStrip)) : []
-        let front = NSWorkspace.shared.frontmostApplication
+        // Podium itself frontmost (Settings, or the desktop hand-off): no Dock click is its own.
+        let front = NSWorkspace.shared.frontmostApplication.flatMap { $0.processIdentifier == getpid() ? nil : $0 }
         interceptor.update(.init(enabled: isRunning, behavior: minimizeBehavior, managed: managed,
                                  dockClickEnabled: isRunning && dockClickMinimizes,
-                                 frontmostPid: front?.processIdentifier, frontmostURL: front?.bundleURL))
+                                 frontmostPid: front?.processIdentifier, frontmostURL: front?.bundleURL,
+                                 frontmostBundleID: front?.bundleIdentifier))
     }
 
     /// Fallback for minimizes the interceptor didn't see (Window menu, custom title bars, a

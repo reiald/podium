@@ -64,20 +64,28 @@ public struct DockClick: Equatable, Sendable {
 /// the frontmost app's own Dock item while that app has a window on the active stage, with
 /// the setting on and a healthy tap. Anything else (another app's item, a folder or the
 /// Trash, a modifier, an app with nothing on stage) passes through to the Dock.
+///
+/// The item matches the frontmost app by path (also with symlinks resolved), else by bundle
+/// identifier (`bundleIdentifier` reads the item's; consulted only then), so an app macOS
+/// runs from a translocated copy still matches its Dock icon.
 public func decideDockClick(_ c: DockClick, enabled: Bool, tapHealthy: Bool,
-                            frontmostAppURL: URL?, frontmostAppHasWindowOnStage: Bool) -> MinimizeDecision {
+                            frontmostAppURL: URL?, frontmostBundleID: String? = nil,
+                            frontmostAppHasWindowOnStage: Bool,
+                            bundleIdentifier: (URL) -> String? = { _ in nil }) -> MinimizeDecision {
     guard enabled, tapHealthy, frontmostAppHasWindowOnStage, c.modifiers.isEmpty,
           c.role == "AXDockItem", c.subrole == "AXApplicationDockItem",
-          let item = c.itemURL, let front = frontmostAppURL,
-          sameBundle(item, front) else { return .passThrough }
-    return .intercept
+          let item = c.itemURL, item.isFileURL, let front = frontmostAppURL else { return .passThrough }
+    if sameBundle(item, front) { return .intercept }
+    if let id = frontmostBundleID, !id.isEmpty, bundleIdentifier(item) == id { return .intercept }
+    return .passThrough
 }
 
-/// File URLs naming the same path ("Safari.app/" and "Safari.app" alike).
+/// File URLs naming the same path ("Safari.app/" and "Safari.app" alike, or through symlinks).
 func sameBundle(_ a: URL, _ b: URL) -> Bool {
     guard a.isFileURL, b.isFileURL else { return false }
     let pa = a.standardizedFileURL.path, pb = b.standardizedFileURL.path
-    return !pa.isEmpty && pa == pb
+    guard !pa.isEmpty, !pb.isEmpty else { return false }
+    return pa == pb || a.resolvingSymlinksInPath().path == b.resolvingSymlinksInPath().path
 }
 
 /// Where a click may be on the Dock's icons, so the tap hit-tests only there: the Dock's
