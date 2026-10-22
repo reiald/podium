@@ -489,3 +489,35 @@ private let visibleAboveDock = CGRect(x: 0, y: 0, width: 1000, height: 760)
         #expect(ledger.entries().isEmpty)
     }
 }
+
+@Test func recoverOnlyTouchesAcceptedEntries() throws {
+    try withLedger { _, ledger in
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: frameA, displayID: 1))
+        try ledger.record(ParkedEntry(window: b, bundleID: nil, originalFrame: frameB, displayID: 1))
+        let backend = FakeBackend()
+        let parked = CGPoint(x: 999, y: 799)
+        backend.frames = [a: CGRect(origin: parked, size: frameA.size), b: CGRect(origin: parked, size: frameB.size)]
+
+        WindowMover(backend: backend, ledger: ledger).recover(visibleScreens: [display], only: { $0 == b })
+        #expect(backend.frames[b] == frameB)
+        #expect(backend.frames[a]?.origin == parked)
+        #expect(ledger.entries().map(\.window) == [a])
+    }
+}
+
+@Test func filteredRecoverKeepsUnreachableEntries() throws {
+    try withLedger { _, ledger in
+        try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: frameA, displayID: 1))
+        let backend = FakeBackend()
+        // Another Space: alive, but AX can't reach it yet.
+        backend.unreachableButLive = [a]
+        let mover = WindowMover(backend: backend, ledger: ledger)
+        mover.recover(visibleScreens: [display], only: { _ in true })
+        #expect(ledger.entries().map(\.window) == [a])
+        // The Space is visited: AX reaches it now, and the retry puts it back.
+        backend.frames[a] = CGRect(origin: CGPoint(x: 999, y: 799), size: frameA.size)
+        mover.recover(visibleScreens: [display], only: { _ in true })
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
+    }
+}

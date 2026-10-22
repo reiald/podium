@@ -107,8 +107,11 @@ public final class WindowMover {
 
     /// Launch-time recovery: puts back every window a previous run left parked, landing
     /// each fully on one of `visibleScreens`.
-    public func recover(visibleScreens: [CGRect]) {
-        let entries = ledger.entries()
+    ///
+    /// `only`, when given, limits it to the entries it accepts (while running: entries no
+    /// stage owns, e.g. windows on another Space that AX could not reach at launch).
+    public func recover(visibleScreens: [CGRect], only include: ((WindowRef) -> Bool)? = nil) {
+        let entries = ledger.entries().filter { include?($0.window) ?? true }
         guard !entries.isEmpty else { return }
         // Liveness unknown: try to restore everything and forget nothing.
         let live = knownLiveWindows() ?? Set(entries.map(\.window))
