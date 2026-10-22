@@ -54,6 +54,13 @@ public struct StageBoard: Equatable, Sendable {
         mru.filter { $0 != activeStageID }.compactMap(stage(_:))
     }
 
+    /// The strip stages that get a slot: `stripStages` minus stages whose windows are all
+    /// in the Dock. Those have no card (the Dock took them off screen), so a slot for them
+    /// would be an invisible click target pushing real stages past the last row.
+    public var visibleStripStages: [Stage] {
+        stripStages.filter { !$0.windows.allSatisfy(minimized.contains) }
+    }
+
     // MARK: Events
 
     /// Adds a new window per the grouping rules above. No-op if already on the board.

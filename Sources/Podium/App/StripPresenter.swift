@@ -94,7 +94,7 @@ final class StripPresenter {
     }
 
     private func slots() -> [StripSlot] {
-        stripSlots(for: board().stripStages, in: layout.screen, side: layout.side, tuning: layout.tuning)
+        stripSlots(for: board().visibleStripStages, in: layout.screen, side: layout.side, tuning: layout.tuning)
     }
 
     private func updateHover() {

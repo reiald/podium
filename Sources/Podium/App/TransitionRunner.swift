@@ -414,7 +414,7 @@ final class TransitionRunner {
             for w in active.windows where tracks[w]?.phase == .strip { enter(w) }
         }
 
-        let stages = b.stripStages
+        let stages = b.visibleStripStages
         let slots = stripSlots(for: stages, in: layout.screen, side: layout.side, tuning: layout.tuning)
         if onlyStages == nil { lastPlacement = [:] }
         for stage in stages where onlyStages?.contains(stage.id) ?? true {
@@ -447,7 +447,7 @@ final class TransitionRunner {
     }
 
     private func isVisibleInStrip(_ w: WindowRef) -> Bool {
-        let stages = board().stripStages
+        let stages = board().visibleStripStages
         guard let row = stages.firstIndex(where: { $0.windows.contains(w) }),
               let index = stages[row].windows.firstIndex(of: w) else { return false }
         return row < layout.tuning.maxRowCount && index < layout.tuning.pileMaxWindows
@@ -492,9 +492,9 @@ final class TransitionRunner {
             guard let self else { return }
             self.fetching.remove(w)
             guard let image, self.tracks[w] == nil, self.mover.isParked(w), self.isVisibleInStrip(w),
-                  let stage = self.board().stripStages.first(where: { $0.windows.contains(w) }) else { return }
+                  let stage = self.board().visibleStripStages.first(where: { $0.windows.contains(w) }) else { return }
             let card = self.makeCard(image: image)
-            let slots = stripSlots(for: self.board().stripStages, in: self.layout.screen,
+            let slots = stripSlots(for: self.board().visibleStripStages, in: self.layout.screen,
                                    side: self.layout.side, tuning: self.layout.tuning)
             var start = self.stripPose(card: card, slot: slots.first { $0.stageID == stage.id }, stage: stage,
                                        index: stage.windows.firstIndex(of: w) ?? 0)

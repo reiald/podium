@@ -1,4 +1,5 @@
 import Testing
+import CoreGraphics
 @testable import PodiumCore
 
 private func w(_ pid: Int32, _ id: UInt32) -> WindowRef { WindowRef(pid: pid, windowID: id) }
@@ -313,4 +314,40 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     // Coming back from the strip is an ordinary activation.
     b.appActivated(pid: 2)
     #expect(b.activeStageID == previous)
+}
+
+@Test func dockMinimizedStageHasNoStripSlot() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))
+    b.minimize(w(2, 21))
+    // Still a strip stage (the model keeps it), but it gets no slot.
+    #expect(b.stripStages.count == 2)
+    #expect(b.visibleStripStages.map(\.windows) == [[w(1, 10)]])
+}
+
+@Test func dockMinimizedLoneStageHasNoSlotUntilDeminimized() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.minimize(w(2, 20))
+    #expect(b.visibleStripStages.map(\.windows) == [[w(1, 10)]])
+    b.deminimize(w(2, 20))
+    #expect(b.activeStage?.windows == [w(2, 20)])
+    #expect(b.visibleStripStages.map(\.windows) == [[w(1, 10)]])
+}
+
+@Test func dockMinimizedStagesDoNotPushRealStagesPastLastRow() {
+    var b = board()
+    let tuning = Tuning.initial
+    // One real strip stage plus more minimized ones than there are rows.
+    b.windowOpened(w(1, 10))
+    for i in 0..<tuning.maxRowCount { b.windowOpened(w(100 + Int32(i), 1)) }
+    for i in 0..<tuning.maxRowCount { b.minimize(w(100 + Int32(i), 1)) }
+    b.windowOpened(w(9, 90))
+    let slots = stripSlots(for: b.visibleStripStages, in: CGRect(x: 0, y: 0, width: 1440, height: 900),
+                           side: .right, tuning: tuning)
+    #expect(slots.count == 1)
+    #expect(slots.first?.stageID == b.stages.first { $0.windows == [w(1, 10)] }?.id)
 }
