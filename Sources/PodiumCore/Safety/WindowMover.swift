@@ -160,14 +160,17 @@ public final class WindowMover {
         _ = backend.setOrigin(parkingOrigin(for: current.size, display: display), of: w)
         guard let back = backend.frame(of: w) else { return false }
 
+        // macOS won't let a window's top go near the display's bottom (it stops ~130–150 pt
+        // above it), so a parked window keeps a 1-pt-wide sliver at the right edge. That is
+        // invisible; anything thicker is not parked.
         func overlap(_ screen: CGRect) -> CGRect? {
             let i = back.intersection(screen)
             return i.isNull || i.width <= 0 || i.height <= 0 ? nil : i
         }
-        if let onDisplay = overlap(display), onDisplay.width > 1 || onDisplay.height > 1 { return false }
+        func isSliver(_ r: CGRect) -> Bool { min(r.width, r.height) <= 1 }
+        if let onDisplay = overlap(display), !isSliver(onDisplay) { return false }
         let shown = backend.visibleScreens().compactMap(overlap)
-        let area = shown.reduce(0) { $0 + $1.width * $1.height }
-        return shown.count <= 1 && area <= 1 && shown.allSatisfy { $0.width <= 1 && $0.height <= 1 }
+        return shown.count <= 1 && shown.allSatisfy(isSliver)
     }
 
     /// Resizes (if needed) and moves to `target`, then verifies the window's origin reads

@@ -9,6 +9,8 @@ private final class FakeBackend: WindowBackend {
     var refuseMoves: Set<WindowRef> = []
     /// When set, every move is clamped so the window stays fully inside this rect.
     var clampTo: CGRect?
+    /// Like macOS: a window's top may go no lower than this many points above the display's bottom.
+    var keepTopAboveBottom: CGFloat?
     var onSetOrigin: ((CGPoint, WindowRef) -> Void)?
     /// Windows the window server reports alive even though AX cannot reach them
     /// (another Space, a hung app).
@@ -30,6 +32,7 @@ private final class FakeBackend: WindowBackend {
             f.origin.x = min(max(f.minX, c.minX), c.maxX - f.width)
             f.origin.y = min(max(f.minY, c.minY), c.maxY - f.height)
         }
+        if let keep = keepTopAboveBottom { f.origin.y = min(f.minY, display.maxY - keep) }
         frames[w] = f
         return true
     }
@@ -95,6 +98,33 @@ private func makeReadOnly(_ dir: URL) throws {
         #expect(backend.frames[a] == frameA)
         #expect(ledger.entries().isEmpty)
         #expect(!mover.isParked(a))
+    }
+}
+
+@Test func parkAcceptsOnePointWideSliverWhenMacOSKeepsTheTopOnScreen() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        backend.keepTopAboveBottom = 149  // observed on macOS 27: windows stop 129–149 pt above the bottom
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(mover.park(a, display: display, displayID: 1))
+        #expect(backend.frames[a]?.origin == CGPoint(x: 999, y: 651))
+        #expect(mover.isParked(a))
+    }
+}
+
+@Test func parkRejectsSliverWiderThanOnePoint() throws {
+    try withLedger { _, ledger in
+        let backend = FakeBackend()
+        backend.frames = [a: frameA]
+        backend.keepTopAboveBottom = 149
+        backend.clampTo = CGRect(x: 0, y: 0, width: 1002, height: 800)  // 3 pt stay visible horizontally
+        let mover = WindowMover(backend: backend, ledger: ledger)
+
+        #expect(!mover.park(a, display: display, displayID: 1))
+        #expect(backend.frames[a] == frameA)
+        #expect(ledger.entries().isEmpty)
     }
 }
 
