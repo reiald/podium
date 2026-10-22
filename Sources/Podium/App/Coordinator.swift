@@ -88,6 +88,7 @@ final class Coordinator {
         runner.onBatchEnd = { [weak self] in
             self?.stamp($0)
             self?.publishMinimizeState()
+            self?.checkFocus(after: $0)
         }
         self.runner = runner
         let presenter = StripPresenter(mover: mover, runner: runner,
@@ -120,10 +121,16 @@ final class Coordinator {
         self.observer = observer
         observer.start()
 
+        let backend = self.backend
         let interceptor = MinimizeInterceptor { [weak self] w in
-            guard let self else { return }
             // The click or key press was swallowed: if parking no longer applies, the user
-            // still gets a minimize, the stock one.
+            // still gets a minimize, the stock one. That holds even when this Coordinator
+            // is gone by the time the interception arrives (Off, Quit in progress).
+            guard let self else {
+                NSLog("Podium: minimize of %u (pid %d) arrived after stop; using the Dock", w.windowID, w.pid)
+                backend.setMinimized(true, of: w)
+                return
+            }
             if !self.minimizeToStrip(w) { self.sendToDock(w) }
         }
         self.interceptor = interceptor
@@ -152,9 +159,14 @@ final class Coordinator {
 
     /// Stops managing windows and puts every parked window back. A Coordinator is not
     /// restartable: Off then On makes a new one.
+    ///
+    /// Windows come back first, teardown second: if Podium is killed while tearing down
+    /// (slow AX, a hung app), no window is left parked. Nothing can interleave: this runs
+    /// to the end on the main thread, and `stop` drops whatever phases were pending.
     func restoreAll() {
-        stop()
+        stopped = true
         mover.restoreAll()
+        stop()
     }
 
     /// Stops managing without touching any window (Accessibility was revoked, so none
@@ -236,6 +248,8 @@ final class Coordinator {
         board.activate(stageID: previous)
         if let front = board.activeStage?.windows.first { board.windowFocused(front) }
         apply(from: old)
+        // The dragged window is about to be parked and must not keep keyboard focus.
+        handOffFocus(from: w)
     }
 
     /// Whether a minimize of `w` can go to the strip: an on-screen window of the active stage.
@@ -265,14 +279,54 @@ final class Coordinator {
             board.activate(stageID: nil)
         }
         apply(from: old)
-        // The parked window must not keep keyboard focus: the stage's next window takes it.
-        if let front = board.activeStage?.windows.first, !mover.isParked(front) {
-            backend.raise(front)
-            if front.pid != w.pid, let app = NSRunningApplication(processIdentifier: front.pid), !app.isActive {
-                app.activate()
+        // The parked window must not keep keyboard focus: the stage's next window takes it,
+        // or the desktop when the stage is now empty.
+        handOffFocus(from: w)
+        return true
+    }
+
+    /// Keyboard focus must never stay on a parked (invisible) window: the active stage's
+    /// front window takes it, or the desktop when the stage area is empty. `w` is the
+    /// window losing focus.
+    private func handOffFocus(from w: WindowRef?) {
+        guard let front = board.activeStage?.windows.first else {
+            focusDesktop(awayFrom: w)
+            return
+        }
+        // An entering front window is raised by the runner once it is unparked.
+        if !mover.isParked(front) { backend.raise(front) }
+        if front.pid != w?.pid, let app = NSRunningApplication(processIdentifier: front.pid), !app.isActive {
+            app.activate()
+        }
+    }
+
+    /// Empty stage = desktop: Finder takes focus, as when clicking the desktop. Not when a
+    /// Finder window is (or is about to be) parked, since activating Finder would focus its
+    /// key window, which may be that invisible one; Podium itself (no windows, so keys go
+    /// nowhere) takes focus then.
+    private func focusDesktop(awayFrom w: WindowRef?) {
+        let finder = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first
+        let activeWindows = Set(board.activeStage?.windows ?? [])
+        if let finder, !finder.isTerminated {
+            let pid = finder.processIdentifier
+            let finderMayBeParked = w?.pid == pid
+                || ledger.entries().contains { $0.window.pid == pid }
+                || board.stages.flatMap(\.windows).contains { $0.pid == pid && !activeWindows.contains($0) }
+            if !finderMayBeParked {
+                finder.activate()
+                return
             }
         }
-        return true
+        NSApp.activate()
+    }
+
+    /// After a park batch: if the frontmost app's focused window is one that was just
+    /// parked, hand focus on. One AX call, and only when a window of that app was parked.
+    private func checkFocus(after touched: [WindowRef]) {
+        guard isRunning, let front = NSWorkspace.shared.frontmostApplication?.processIdentifier,
+              front != getpid(), touched.contains(where: { $0.pid == front && mover.isParked($0) }),
+              let focused = focusedWindow(of: front), mover.isParked(focused) else { return }
+        handOffFocus(from: focused)
     }
 
     /// Tells the tap thread which windows it may intercept (on screen in the active stage).
@@ -549,8 +603,10 @@ final class Coordinator {
 
     /// Stamps every window the batch touched, counting from now (the batch's end).
     private func endBatch() {
-        stamp(Array(batchTouched))
+        let touched = Array(batchTouched)
+        stamp(touched)
         batchTouched = []
+        checkFocus(after: touched)
     }
 
     /// Marks windows in flight for `inFlightWindow`, counting from now.
