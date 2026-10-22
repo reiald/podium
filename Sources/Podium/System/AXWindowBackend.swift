@@ -5,6 +5,10 @@ import PodiumCore
 import struct PodiumCore.WindowRef
 
 /// `WindowBackend` over the Accessibility API. Main thread only.
+///
+/// An app that just timed out an AX call (`AX.isHung`) is skipped for a few seconds: its
+/// windows read as unreachable (no frame, moves refused), so they stay exactly where they
+/// are and their ledger entries are kept, without blocking the main thread on each call.
 final class AXWindowBackend: WindowBackend {
     private var elements: [WindowRef: AXUIElement] = [:]
 
@@ -72,10 +76,7 @@ final class AXWindowBackend: WindowBackend {
 
     /// AXMinimized, or nil when it can't be read (window gone or app not answering).
     func minimizedState(of w: WindowRef) -> Bool? {
-        guard let e = element(for: w) else { return nil }
-        var value: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(e, kAXMinimizedAttribute as CFString, &value) == .success else { return nil }
-        return value as? Bool
+        element(for: w).flatMap { AX.optionalBool(kAXMinimizedAttribute, of: $0) }
     }
 
     /// Sets AXMinimized; false brings a window back from the Dock.
@@ -89,7 +90,7 @@ final class AXWindowBackend: WindowBackend {
     @discardableResult
     func raise(_ w: WindowRef) -> Bool {
         guard let e = element(for: w) else { return false }
-        return AXUIElementPerformAction(e, kAXRaiseAction as CFString) == .success
+        return AX.perform(kAXRaiseAction, on: e)
     }
 
     static func manageable(_ e: AXUIElement) -> Bool {
@@ -110,6 +111,7 @@ final class AXWindowBackend: WindowBackend {
     }
 
     private func element(for w: WindowRef) -> AXUIElement? {
+        guard !AX.isHung(w.pid) else { return nil }
         if let e = elements[w] { return e }
         for (ref, e) in windows(of: w.pid) { elements[ref] = e }
         return elements[w]

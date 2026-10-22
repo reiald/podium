@@ -20,6 +20,7 @@ final class Coordinator {
     private let mover: WindowMover
     private let ledger: ParkingLedger
     private let capture: Capture
+    private let unparkRetry: UnparkRetry
     private var snapshotTimer: Timer?
     private var snapshotTick = 0
     /// Non-focused on-stage windows are refreshed every this many ticks (1 s each).
@@ -69,6 +70,7 @@ final class Coordinator {
         self.mover = mover
         self.ledger = ledger
         self.capture = capture
+        self.unparkRetry = UnparkRetry(mover: mover)
         self.board = StageBoard(displayID: Screens.all.first?.id ?? 0)
     }
 
@@ -78,7 +80,7 @@ final class Coordinator {
         guard runner == nil else { return }
         seedBoard()
         guard let runner = TransitionRunner(backend: backend, mover: mover, ledger: ledger, capture: capture,
-                                            layout: layout, board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
+                                            unparkRetry: unparkRetry, layout: layout, board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
         else {
             // No display: nothing to animate on; instant moves only.
             NSLog("Podium: no screen; stage switching without animation")
@@ -501,7 +503,8 @@ final class Coordinator {
     }
 
     private func focusedWindow(of pid: pid_t) -> WindowRef? {
-        AX.focusedWindow(of: pid).flatMap(AX.windowID(of:)).map { WindowRef(pid: pid, windowID: $0) }
+        guard !AX.isHung(pid) else { return nil }
+        return AX.focusedWindow(of: pid).flatMap(AX.windowID(of:)).map { WindowRef(pid: pid, windowID: $0) }
     }
 
     private func shouldManage(_ w: WindowRef) -> Bool {
@@ -556,8 +559,11 @@ final class Coordinator {
         plan.leaving.removeAll { alreadyOffScreen.contains($0) }
         // A parked window can join the active stage without having been in the strip (it
         // re-joined the board, e.g. a kept ledger entry focused via Cmd-`): it enters too.
+        // So does one whose unpark failed earlier, but only once its backoff allows.
         let entering = Set(plan.entering)
-        plan.entering += (board.activeStage?.windows ?? []).filter { !entering.contains($0) && mover.isParked($0) }
+        plan.entering += (board.activeStage?.windows ?? []).filter {
+            !entering.contains($0) && mover.isParked($0) && unparkRetry.mayTry($0)
+        }
         for w in alreadyOffScreen { runner?.forget(w) }
         // In flight from the start: the moves happen a few frames (or a whole flight) later,
         // and the focus noise of the app switch must not bounce stages meanwhile.
@@ -582,7 +588,7 @@ final class Coordinator {
     private func show(_ windows: [WindowRef]) {
         for w in windows {
             batchTouched.insert(w)
-            if !mover.unpark(w) { NSLog("Podium: could not unpark %u (pid %d)", w.windowID, w.pid) }
+            if !unparkRetry.unpark(w) { NSLog("Podium: could not unpark %u (pid %d)", w.windowID, w.pid) }
         }
     }
 

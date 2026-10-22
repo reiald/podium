@@ -68,6 +68,7 @@ final class TransitionRunner {
     private let mover: WindowMover
     private let ledger: ParkingLedger
     private let capture: Capture
+    private let unparkRetry: UnparkRetry
     private let board: () -> StageBoard
     private let logger = Logger(subsystem: "dev.podium.Podium", category: "transition")
     private var overlay: Overlay
@@ -87,12 +88,13 @@ final class TransitionRunner {
 
     /// Nil when there is no display to draw on.
     init?(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger, capture: Capture,
-          layout: Layout, board: @escaping () -> StageBoard) {
+          unparkRetry: UnparkRetry, layout: Layout, board: @escaping () -> StageBoard) {
         guard let primary = NSScreen.screens.first else { return nil }
         self.backend = backend
         self.mover = mover
         self.ledger = ledger
         self.capture = capture
+        self.unparkRetry = unparkRetry
         self.layout = layout
         self.board = board
         overlay = Overlay(screen: primary)
@@ -234,7 +236,7 @@ final class TransitionRunner {
 
     private func entered(_ w: WindowRef, generation: Int) {
         guard let t = tracks[w], t.phase == .entering, t.generation == generation else { return }
-        let ok = !mover.isParked(w) || mover.unpark(w)
+        let ok = !mover.isParked(w) || unparkRetry.unpark(w)
         onBatchEnd([w])
         guard ok else {
             // It stays in the ledger (restoreAll / recovery own it). Dropping the card rather
@@ -392,7 +394,7 @@ final class TransitionRunner {
     }
 
     private func unparkNow(_ windows: [WindowRef]) {
-        for w in windows where !mover.unpark(w) {
+        for w in windows where !unparkRetry.unpark(w) {
             logger.error("could not unpark \(w.windowID, privacy: .public) (pid \(w.pid, privacy: .public))")
         }
         onBatchEnd(windows)
