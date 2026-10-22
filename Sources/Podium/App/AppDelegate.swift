@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var appleStageManagerWasOn = false
     private var alertShowing = false
     private var statusItem: NSStatusItem?
+    /// Bumped by each hotkey flash, so only the latest one restores the icon.
+    private var statusFlash = 0
+    private lazy var hotKey = HotKey { [weak self] in self?.togglePodiumFromHotKey() }
     private let backend = AXWindowBackend()
     private lazy var ledger = ParkingLedger(fileURL: Self.ledgerURL)
     private lazy var mover = WindowMover(backend: backend, ledger: ledger)
@@ -221,6 +224,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         syncCoordinator()
     }
 
+    /// ⌃⌥⌘P: the menu's toggle, plus a brief flash of the status item so it is noticed.
+    private func togglePodiumFromHotKey() {
+        togglePodium()
+        flashStatusItem()
+    }
+
+    private func setHotKey(_ on: Bool) {
+        if on {
+            settings.hotKeyUnavailable = !hotKey.register()
+        } else {
+            hotKey.unregister()
+            settings.hotKeyUnavailable = false
+        }
+    }
+
     @objc private func setSideLeft() { setSide(.left) }
     @objc private func setSideRight() { setSide(.right) }
 
@@ -255,6 +273,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         settingsSubscriptions = [
+            settings.$enabled.dropFirst().sink { [weak self] value in
+                MainActor.assumeIsolated { self?.updateStatusIcon(enabled: value) }
+            },
+            // No dropFirst: this also registers the hotkey at launch.
+            settings.$hotKeyEnabled.sink { [weak self] value in
+                MainActor.assumeIsolated { self?.setHotKey(value) }
+            },
             apply(settings.$side) { $0.setSide($1) },
             apply(settings.$minimizeBehavior) { $0.minimizeBehavior = $1 },
             apply(settings.$autoHide) { $0.autoHideEnabled = $1 },
@@ -292,7 +317,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func installStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "rectangle.split.3x1", accessibilityDescription: "Podium")
 
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -328,10 +352,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(withTitle: "Quit Podium", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu
         statusItem = item
+        updateStatusIcon(enabled: settings.enabled)
+    }
+
+    /// The strip symbol when on; dimmed when off.
+    private func updateStatusIcon(enabled: Bool) {
+        guard let button = statusItem?.button else { return }
+        button.image = NSImage(systemSymbolName: "rectangle.split.3x1",
+                               accessibilityDescription: enabled ? "Podium" : "Podium (off)")
+        button.appearsDisabled = !enabled
+    }
+
+    /// Shows a filled (on) or slashed (off) symbol for a moment, then the steady icon.
+    private func flashStatusItem() {
+        guard let button = statusItem?.button else { return }
+        let enabled = settings.enabled
+        statusFlash += 1
+        let flash = statusFlash
+        button.image = NSImage(systemSymbolName: enabled ? "rectangle.split.3x1.fill" : "rectangle.slash",
+                               accessibilityDescription: enabled ? "Podium" : "Podium (off)")
+        button.appearsDisabled = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, self.statusFlash == flash else { return }
+            self.updateStatusIcon(enabled: self.settings.enabled)
+        }
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menuItems[.power]?.title = settings.enabled ? "Turn Podium Off" : "Turn Podium On"
+        // Display only: the system-wide hotkey does the work.
+        menuItems[.power]?.keyEquivalent = hotKey.isRegistered ? HotKey.keyEquivalent : ""
+        menuItems[.power]?.keyEquivalentModifierMask = HotKey.modifierMask
         menuItems[.setUp]?.isHidden = ready
         menuItems[.left]?.state = settings.side == .left ? .on : .off
         menuItems[.right]?.state = settings.side == .right ? .on : .off

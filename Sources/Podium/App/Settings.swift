@@ -25,6 +25,10 @@ final class Settings: ObservableObject {
     @Published var turnedOffAppleStageManager: Bool {
         didSet { defaults.set(turnedOffAppleStageManager, forKey: "turnedOffAppleStageManager") }
     }
+    /// ⌃⌥⌘P turns Podium on or off from anywhere.
+    @Published var hotKeyEnabled: Bool { didSet { defaults.set(hotKeyEnabled, forKey: "hotKeyEnabled") } }
+    /// The hotkey is on but could not be registered (another app holds it). Not stored.
+    @Published var hotKeyUnavailable = false
     /// Thumbnail size, tilt and app icons (the Settings window). Stored clamped; out-of-range
     /// values are clamped again wherever they are applied.
     @Published var customization: StripCustomization {
@@ -47,6 +51,7 @@ final class Settings: ObservableObject {
         dockClickMinimizes = defaults.bool(forKey: "dockClickMinimizes")
         onboarded = defaults.bool(forKey: "onboarded")
         turnedOffAppleStageManager = defaults.bool(forKey: "turnedOffAppleStageManager")
+        hotKeyEnabled = defaults.object(forKey: "hotKeyEnabled") as? Bool ?? true
         let d = StripCustomization.defaults
         func number(_ key: String, _ fallback: CGFloat) -> CGFloat {
             (defaults.object(forKey: key) as? NSNumber).map { CGFloat($0.doubleValue) } ?? fallback

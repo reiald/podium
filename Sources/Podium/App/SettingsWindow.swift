@@ -2,13 +2,38 @@ import AppKit
 import PodiumCore
 import SwiftUI
 
-/// The Settings window: strip look (thumbnail size, tilt, app icons) and the strip options
-/// the menu also has. Every control writes `Settings`; the AppDelegate applies changes live.
+/// The Settings window: login item and hotkey, strip look (thumbnail size, tilt, app icons)
+/// and the strip options the menu also has. Every control writes `Settings` (or the login
+/// item); the AppDelegate applies changes live.
 struct SettingsView: View {
     @ObservedObject var settings: Settings
+    @ObservedObject var loginItem: LoginItem
 
     var body: some View {
         Form {
+            Section("General") {
+                Toggle("Open Podium at login",
+                       isOn: Binding(get: { loginItem.isOn }, set: { loginItem.setOn($0) }))
+                if loginItem.status == .requiresApproval {
+                    LabeledContent {
+                        Button("Open Login Items") { loginItem.openLoginItemsSettings() }
+                    } label: {
+                        Text("Needs your approval")
+                        Text("Allow Podium in System Settings > General > Login Items.")
+                    }
+                }
+                if let error = loginItem.errorText {
+                    Text("Couldn't change the login item: \(error)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                Toggle(isOn: $settings.hotKeyEnabled) {
+                    Text("Turn Podium on or off with \(HotKey.display)")
+                    if settings.hotKeyEnabled, settings.hotKeyUnavailable {
+                        Text("\(HotKey.display) is in use by another app, so it isn't available.")
+                    }
+                }
+            }
             Section("Strip") {
                 Picker("Strip side", selection: $settings.side) {
                     Text("Left").tag(StripSide.left)
@@ -86,14 +111,18 @@ private struct LabeledSlider: View {
 final class SettingsWindowController {
     private var window: NSWindow?
     private let settings: Settings
+    private let loginItem = LoginItem()
 
     init(settings: Settings) {
         self.settings = settings
     }
 
     func show() {
+        // The user may have changed it in System Settings since the last look.
+        loginItem.refresh()
         if window == nil {
-            let w = SettingsNSWindow(contentViewController: NSHostingController(rootView: SettingsView(settings: settings)))
+            let w = SettingsNSWindow(contentViewController: NSHostingController(
+                rootView: SettingsView(settings: settings, loginItem: loginItem)))
             w.title = "Podium Settings"
             w.styleMask = [.titled, .closable]
             w.isReleasedWhenClosed = false
