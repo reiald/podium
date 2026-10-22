@@ -61,18 +61,19 @@ public struct DockClick: Equatable, Sendable {
 }
 
 /// "Click an app's Dock icon to minimize it to the strip": intercept only a plain click on
-/// the frontmost app's own Dock item while that app has a window on the active stage, with
-/// the setting on and a healthy tap. Anything else (another app's item, a folder or the
-/// Trash, a modifier, an app with nothing on stage) passes through to the Dock.
+/// the frontmost app's own Dock item while that app has a window on the stage or in the
+/// strip (the click then minimizes it, or brings it back), with the setting on and a healthy
+/// tap. Anything else (another app's item, a folder or the Trash, a modifier, an app Podium
+/// has no window of) passes through to the Dock.
 ///
 /// The item matches the frontmost app by path (also with symlinks resolved), else by bundle
 /// identifier (`bundleIdentifier` reads the item's; consulted only then), so an app macOS
 /// runs from a translocated copy still matches its Dock icon.
 public func decideDockClick(_ c: DockClick, enabled: Bool, tapHealthy: Bool,
                             frontmostAppURL: URL?, frontmostBundleID: String? = nil,
-                            frontmostAppHasWindowOnStage: Bool,
+                            frontmostAppHasWindowOnBoard: Bool,
                             bundleIdentifier: (URL) -> String? = { _ in nil }) -> MinimizeDecision {
-    guard enabled, tapHealthy, frontmostAppHasWindowOnStage, c.modifiers.isEmpty,
+    guard enabled, tapHealthy, frontmostAppHasWindowOnBoard, c.modifiers.isEmpty,
           c.role == "AXDockItem", c.subrole == "AXApplicationDockItem",
           let item = c.itemURL, item.isFileURL, let front = frontmostAppURL else { return .passThrough }
     if sameBundle(item, front) { return .intercept }

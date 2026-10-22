@@ -145,7 +145,7 @@ final class Coordinator {
             // The Dock never saw the click: if minimizing no longer applies, the click still
             // does what a Dock click does.
             guard let self else { return Self.openLikeDockClick(pid: pid) }
-            if !self.minimizeAppToStrip(pid: pid) {
+            if !self.minimizeAppToStrip(pid: pid), !self.restoreAppFromStrip(pid: pid) {
                 Self.openLikeDockClick(pid: pid)
                 if self.isRunning { self.handle(.appActivated(pid)) }
             }
@@ -351,6 +351,26 @@ final class Coordinator {
         return true
     }
 
+    /// Dock-icon click on the frontmost app with nothing on stage but windows in the strip
+    /// (it was just minimized there): they come back, as a strip click on them would.
+    /// False (nothing changed) if it no longer applies; the caller then does the stock click.
+    @discardableResult
+    func restoreAppFromStrip(pid: pid_t) -> Bool {
+        guard !applying, isRunning, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
+              !(board.activeStage?.windows.contains { $0.pid == pid } ?? false),
+              appsInStrip().contains(pid) else { return false }
+        let old = board
+        board.appActivated(pid: pid)
+        apply(from: old)
+        return true
+    }
+
+    /// Apps with a window in the strip: on the board, off the active stage, not in the Dock.
+    private func appsInStrip() -> Set<pid_t> {
+        let active = Set(board.activeStage?.windows ?? [])
+        return Set(board.stages.flatMap(\.windows).filter { !active.contains($0) && !board.isMinimized($0) }.map(\.pid))
+    }
+
     /// What a Dock click on a running app does: activates it and sends it a reopen event.
     private static func openLikeDockClick(pid: pid_t) {
         guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
@@ -414,6 +434,7 @@ final class Coordinator {
         // Podium itself frontmost (Settings, or the desktop hand-off): no Dock click is its own.
         let front = NSWorkspace.shared.frontmostApplication.flatMap { $0.processIdentifier == getpid() ? nil : $0 }
         interceptor.update(.init(enabled: isRunning, behavior: minimizeBehavior, managed: managed,
+                                 inStrip: isRunning ? appsInStrip() : [],
                                  dockClickEnabled: isRunning && dockClickMinimizes,
                                  frontmostPid: front?.processIdentifier, frontmostURL: front?.bundleURL,
                                  frontmostBundleID: front?.bundleIdentifier))

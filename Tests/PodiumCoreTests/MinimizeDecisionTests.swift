@@ -116,9 +116,9 @@ import Foundation
 
     private func decide(_ c: DockClick, enabled: Bool = true, tapHealthy: Bool = true,
                         frontmost: URL? = URL(fileURLWithPath: "/Applications/Safari.app"),
-                        onStage: Bool = true) -> MinimizeDecision {
+                        onBoard: Bool = true) -> MinimizeDecision {
         decideDockClick(c, enabled: enabled, tapHealthy: tapHealthy,
-                        frontmostAppURL: frontmost, frontmostAppHasWindowOnStage: onStage)
+                        frontmostAppURL: frontmost, frontmostAppHasWindowOnBoard: onBoard)
     }
 
     @Test func interceptsPlainClickOnFrontmostAppDockItem() {
@@ -133,7 +133,7 @@ import Foundation
     }
 
     @Test func passesThroughWhenAppHasNoWindowOnStage() {
-        #expect(decide(click(safari), onStage: false) == .passThrough)
+        #expect(decide(click(safari), onBoard: false) == .passThrough)
     }
 
     @Test func passesThroughWithModifiers() {
@@ -200,7 +200,7 @@ import Foundation
     @Test func translocatedAppMatchesByBundleIdentifier() {
         let running = URL(fileURLWithPath: "/private/var/folders/xy/AppTranslocation/ABC/d/Tool.app")
         let d = decideDockClick(click, enabled: true, tapHealthy: true, frontmostAppURL: running,
-                                frontmostBundleID: "com.example.tool", frontmostAppHasWindowOnStage: true,
+                                frontmostBundleID: "com.example.tool", frontmostAppHasWindowOnBoard: true,
                                 bundleIdentifier: { _ in "com.example.tool" })
         #expect(d == .intercept)
     }
@@ -208,12 +208,12 @@ import Foundation
     @Test func differentBundleIdentifierPasses() {
         let other = URL(fileURLWithPath: "/Applications/Other.app")
         let d = decideDockClick(click, enabled: true, tapHealthy: true, frontmostAppURL: other,
-                                frontmostBundleID: "com.example.other", frontmostAppHasWindowOnStage: true,
+                                frontmostBundleID: "com.example.other", frontmostAppHasWindowOnBoard: true,
                                 bundleIdentifier: { _ in "com.example.tool" })
         #expect(d == .passThrough)
         // No identifier on either side: never a match.
         #expect(decideDockClick(click, enabled: true, tapHealthy: true, frontmostAppURL: other,
-                                frontmostBundleID: nil, frontmostAppHasWindowOnStage: true,
+                                frontmostBundleID: nil, frontmostAppHasWindowOnBoard: true,
                                 bundleIdentifier: { _ in nil }) == .passThrough)
     }
 
@@ -226,6 +226,6 @@ import Foundation
         defer { try? FileManager.default.removeItem(at: dir) }
         let c = DockClick(modifiers: [], role: "AXDockItem", subrole: "AXApplicationDockItem", itemURL: link)
         #expect(decideDockClick(c, enabled: true, tapHealthy: true, frontmostAppURL: real,
-                                frontmostAppHasWindowOnStage: true) == .intercept)
+                                frontmostAppHasWindowOnBoard: true) == .intercept)
     }
 }

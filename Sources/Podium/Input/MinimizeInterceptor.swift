@@ -8,7 +8,7 @@ import struct PodiumCore.WindowRef
 /// Catches the yellow button and Cmd-M before the app sees them, so a managed window can
 /// fly into the strip instead of the Dock (`onIntercept`, called on the main thread). With
 /// the Dock-click setting on, a plain click on the frontmost app's Dock icon sends that app's
-/// on-stage windows to the strip (`onDockClick`). That press is swallowed but decided only
+/// on-stage windows to the strip, or brings them back from it (`onDockClick`). That press is swallowed but decided only
 /// when it ends (`DockPress`): a drag or press-and-hold is replayed to the Dock untouched.
 ///
 /// An event tap sits in front of all system input, so it is deliberately timid: anything
@@ -25,6 +25,8 @@ final class MinimizeInterceptor: @unchecked Sendable {
         var behavior: MinimizeBehavior = .dock
         /// Windows whose minimize may go to the strip (on screen in the active stage).
         var managed: Set<WindowRef> = []
+        /// Apps with a window in the strip (off stage, not in the Dock).
+        var inStrip: Set<pid_t> = []
         /// "Click an app's Dock icon to minimize it to the strip".
         var dockClickEnabled = false
         /// The frontmost app and its bundle.
@@ -345,8 +347,9 @@ final class MinimizeInterceptor: @unchecked Sendable {
     /// press on the frontmost app's own icon starts a `DockPress`; any other item passes.
     private func dockClick(_ event: CGEvent, _ s: State, modifiers: ModifierSet, tapHealthy: Bool) -> DockHit {
         let p = event.location
+        let onBoard = s.frontmostPid.map { pid in s.managed.contains { $0.pid == pid } || s.inStrip.contains(pid) } ?? false
         guard s.dockClickEnabled, modifiers.isEmpty, tapHealthy, let pid = s.frontmostPid,
-              let front = s.frontmostURL, let systemWide, s.managed.contains(where: { $0.pid == pid }),
+              let front = s.frontmostURL, let systemWide, onBoard,
               dockGate.withLock({ $0?.contains(p) }) == true else { return .notInDock }
         var hit: AXUIElement?
         guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success,
@@ -359,7 +362,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
                               itemURL: Self.url(kAXURLAttribute, of: item))
         guard decideDockClick(click, enabled: s.dockClickEnabled, tapHealthy: tapHealthy, frontmostAppURL: front,
                               frontmostBundleID: s.frontmostBundleID,
-                              frontmostAppHasWindowOnStage: s.managed.contains { $0.pid == pid },
+                              frontmostAppHasWindowOnBoard: onBoard,
                               bundleIdentifier: { Bundle(url: $0)?.bundleIdentifier }) == .intercept
         else { return .decided(.pass) }
         return .decided(.dockPress(pid))
