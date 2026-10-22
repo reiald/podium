@@ -33,7 +33,8 @@ final class Overlay {
         window.hasShadow = false
         window.ignoresMouseEvents = true
         window.level = .floating
-        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        // Not `.fullScreenAuxiliary`: cards must not draw over a full-screen app.
+        window.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         window.isReleasedWhenClosed = false
         window.setFrame(screen.frame, display: false)
 

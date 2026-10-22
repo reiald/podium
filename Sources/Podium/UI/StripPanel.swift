@@ -3,6 +3,9 @@ import AppKit
 /// The only part of Podium's UI that takes the mouse: a clear, non-activating panel covering
 /// just the strip band. Everything is reported in top-left-origin global (AX) coordinates.
 ///
+/// It starts click-through; the `StripPresenter` turns mouse-taking on only while the pointer
+/// is over a target, so the band's empty space (and windows under it) still get clicks.
+///
 /// `targets` maps stage IDs to their hit rects (AX coordinates). A press on a target that is
 /// released inside the band is a click (or shift-click); one released outside the band is a
 /// drag to the stage.
@@ -28,11 +31,13 @@ final class StripPanel: NSPanel {
         backgroundColor = .clear
         hasShadow = false
         level = .floating
-        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        // Not `.fullScreenAuxiliary`: the strip must not sit over a full-screen app.
+        collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
-        // A clear window lets clicks fall through unless this is set explicitly.
-        ignoresMouseEvents = false
+        // Click-through until the pointer is over a target (set explicitly: a clear window's
+        // default depends on its content).
+        ignoresMouseEvents = true
         acceptsMouseMovedEvents = true
         contentView = catcher
         catcher.panel = self

@@ -52,10 +52,9 @@ final class StripPresenter {
         panel.onClick = { [weak self] in self?.onSelect($0) }
         panel.onShiftClick = { [weak self] in self?.onShiftClick($0) }
         panel.onDragToStage = { [weak self] in self?.onCombine($0) }
-        panel.onHover = { [weak self] point in
-            self?.pointerInPanel = point
-            self?.updateHover()
-        }
+        // The panel only sees the pointer while it takes the mouse; the pointer's real
+        // position (read in `trackPointer`) drives hover either way, so no exit flicker.
+        panel.onHover = { [weak self] _ in self?.trackPointer() }
     }
 
     /// Shows the (clear) panel right away: a new window's first composite costs a frame.
@@ -71,6 +70,11 @@ final class StripPresenter {
         if let up = NSEvent.addGlobalMonitorForEvents(matching: .leftMouseUp, handler: { [weak self] _ in
             MainActor.assumeIsolated { self?.mouseUp() }
         }) { monitors.append(up) }
+        // Pointer moves over other apps: the panel must take the mouse as soon as the pointer
+        // reaches a slot, before the click, without waiting for the next poll.
+        if let moved = NSEvent.addGlobalMonitorForEvents(matching: .mouseMoved, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.trackPointer() }
+        }) { monitors.append(moved) }
     }
 
     func stop() {
@@ -98,9 +102,27 @@ final class StripPresenter {
         runner.setHovered(latch.hovered)
     }
 
-    /// Hidden, or nothing to click: clicks in the band reach the windows underneath.
-    private func updateMouseTaking() {
-        panel.ignoresMouseEvents = runner.isHidden || panel.targets.isEmpty
+    /// Reads the pointer: hover follows it inside the band, and the panel takes the mouse
+    /// only while it is over a target.
+    private func trackPointer() {
+        let p = Self.pointer()
+        let inBand = !runner.isHidden && band.contains(p) ? p : nil
+        if inBand != pointerInPanel {
+            pointerInPanel = inBand
+            updateHover()
+        }
+        updateMouseTaking(pointer: p)
+    }
+
+    /// The panel takes the mouse only while the pointer is over a slot target of a shown
+    /// strip. Everywhere else in the band (gaps, empty rows, a hidden strip) clicks, scroll
+    /// and drags reach the windows underneath.
+    private func updateMouseTaking(pointer: CGPoint? = nil) {
+        let p = pointer ?? Self.pointer()
+        // Mid-press, whoever got the mouse-down keeps the mouse until it is released.
+        guard NSEvent.pressedMouseButtons == 0 else { return }
+        let overTarget = !runner.isHidden && panel.targets.contains { $0.frame.contains(p) }
+        if panel.ignoresMouseEvents == overTarget { panel.ignoresMouseEvents = !overTarget }
     }
 
     // MARK: - Auto-hide
@@ -118,6 +140,7 @@ final class StripPresenter {
 
     private func poll() {
         pollTick += 1
+        trackPointer()
         if pollTick % Self.frameRefreshEvery == 1 { refreshStageFrames() }
         let band = self.band
         let area = band.width * band.height
