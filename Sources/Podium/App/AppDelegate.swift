@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Combine
 import PodiumCore
 
 @MainActor
@@ -8,6 +9,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var menuItems: [MenuID: NSMenuItem] = [:]
     private let settings = Settings()
     private var onboarding: OnboardingWindowController?
+    private lazy var settingsWindow = SettingsWindowController(settings: settings)
+    /// Pushes setting changes (menu or Settings window) to the running Coordinator.
+    private var settingsSubscriptions: [AnyCancellable] = []
     /// Accessibility was revoked while running; recovery waits for it to return.
     private var accessibilityLost = false
     /// A debug flag parked windows by hand; no Coordinator may start.
@@ -47,6 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSLog("Podium: AXIsProcessTrusted=%d screenRecording=%d", AXIsProcessTrusted(), CGPreflightScreenCaptureAccess())
         installStatusItem()
         installSignalHandlers()
+        observeSettings()
 
         // A previous run (or crash) may have left windows parked.
         axWasTrusted = AXIsProcessTrusted()
@@ -172,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.setSide(settings.side)
         coordinator.minimizeBehavior = settings.minimizeBehavior
         coordinator.autoHideEnabled = settings.autoHide
+        coordinator.setCustomization(settings.customization)
         self.coordinator = coordinator
         coordinator.start()
     }
@@ -218,7 +224,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setSide(_ side: StripSide) {
         settings.side = side
-        coordinator?.setSide(side)
     }
 
     @objc private func setMinimizeStrip() { setMinimize(.strip) }
@@ -226,12 +231,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func setMinimize(_ behavior: MinimizeBehavior) {
         settings.minimizeBehavior = behavior
-        coordinator?.minimizeBehavior = behavior
     }
 
     @objc private func toggleAutoHide() {
         settings.autoHide.toggle()
-        coordinator?.autoHideEnabled = settings.autoHide
+    }
+
+    @objc private func showSettings() { settingsWindow.show() }
+
+    /// Menu and Settings window both just write `settings`; this applies every change to the
+    /// running Coordinator (a new one reads them in `startManaging`). Slider drags are
+    /// coalesced to at most one strip relayout per frame (~60 Hz); the main queue keeps
+    /// delivering while a slider is tracking.
+    private func observeSettings() {
+        func apply<T>(_ publisher: Published<T>.Publisher, _ body: @escaping (Coordinator, T) -> Void) -> AnyCancellable {
+            publisher.dropFirst().sink { [weak self] value in
+                MainActor.assumeIsolated {
+                    if let coordinator = self?.coordinator { body(coordinator, value) }
+                }
+            }
+        }
+        settingsSubscriptions = [
+            apply(settings.$side) { $0.setSide($1) },
+            apply(settings.$minimizeBehavior) { $0.minimizeBehavior = $1 },
+            apply(settings.$autoHide) { $0.autoHideEnabled = $1 },
+            settings.$customization.dropFirst()
+                .throttle(for: .seconds(1.0 / 60.0), scheduler: DispatchQueue.main, latest: true)
+                .sink { [weak self] value in
+                    MainActor.assumeIsolated { self?.coordinator?.setCustomization(value) }
+                },
+        ]
     }
 
     /// Emergency action: restores every window and leaves Podium Off (the menu shows it);
@@ -271,6 +300,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         add(.power, "Turn Podium Off", #selector(togglePodium))
         add(.setUp, "Set Up Podium…", #selector(setUpPodium))
+        let settingsItem = NSMenuItem(title: "Settings…", action: #selector(showSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
         menu.addItem(.separator())
         add(.left, "Strip on Left", #selector(setSideLeft))
         add(.right, "Strip on Right", #selector(setSideRight))

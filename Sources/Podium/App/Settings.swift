@@ -19,6 +19,17 @@ final class Settings: ObservableObject {
     @Published var turnedOffAppleStageManager: Bool {
         didSet { defaults.set(turnedOffAppleStageManager, forKey: "turnedOffAppleStageManager") }
     }
+    /// Thumbnail size, tilt and app icons (the Settings window). Stored clamped; out-of-range
+    /// values are clamped again wherever they are applied.
+    @Published var customization: StripCustomization {
+        didSet {
+            let c = customization.clamped()
+            defaults.set(Double(c.thumbnailWidth), forKey: "thumbnailWidth")
+            defaults.set(Double(c.tiltDegrees), forKey: "tiltDegrees")
+            defaults.set(c.showAppIcons, forKey: "showAppIcons")
+            defaults.set(Double(c.appIconSize), forKey: "appIconSize")
+        }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -28,5 +39,23 @@ final class Settings: ObservableObject {
         autoHide = defaults.object(forKey: "autoHide") as? Bool ?? true
         onboarded = defaults.bool(forKey: "onboarded")
         turnedOffAppleStageManager = defaults.bool(forKey: "turnedOffAppleStageManager")
+        let d = StripCustomization.defaults
+        func number(_ key: String, _ fallback: CGFloat) -> CGFloat {
+            (defaults.object(forKey: key) as? NSNumber).map { CGFloat($0.doubleValue) } ?? fallback
+        }
+        customization = StripCustomization(
+            thumbnailWidth: number("thumbnailWidth", d.thumbnailWidth),
+            tiltDegrees: number("tiltDegrees", d.tiltDegrees),
+            showAppIcons: defaults.object(forKey: "showAppIcons") as? Bool ?? d.showAppIcons,
+            appIconSize: number("appIconSize", d.appIconSize)
+        ).clamped()
+    }
+
+    /// The Settings window's Reset to Defaults: the customization and the strip options.
+    func resetToDefaults() {
+        customization = .defaults
+        side = .right
+        minimizeBehavior = .strip
+        autoHide = true
     }
 }

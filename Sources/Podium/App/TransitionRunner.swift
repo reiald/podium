@@ -59,6 +59,8 @@ final class TransitionRunner {
     var onBatchEnd: ([WindowRef]) -> Void = { _ in }
 
     private(set) var layout: Layout
+    /// Off: strip cards show no app-icon badge (Settings window).
+    var showAppIcons = true
     private(set) var hovered: UUID?
     private(set) var isHidden = false
 
@@ -120,9 +122,11 @@ final class TransitionRunner {
         relayoutStrip(spring: layout.tuning.transitionSpring)
     }
 
-    /// Re-places every strip card (strip order, side, pile) without a model change.
+    /// Re-places every strip card (strip order, side, pile, size, tilt, badge) without a
+    /// model change.
     func update(layout: Layout) {
         self.layout = layout
+        for t in tracks.values { t.card.tuning = layout.tuning }
         relayoutStrip(spring: layout.tuning.transitionSpring)
     }
 
@@ -462,7 +466,7 @@ final class TransitionRunner {
                 }
                 guard t.phase == .strip else { continue }
                 t.card.side = layout.side
-                t.card.appIcon = index == 0 ? icon(for: w.pid) : nil
+                t.card.appIcon = index == 0 && showAppIcons ? icon(for: w.pid) : nil
                 setZ(t.card, CGFloat(layout.tuning.pileMaxWindows - index))
                 animator.drive(t.card, to: stripPose(card: t.card, slot: slot, stage: stage, index: index),
                                spring: spring)
@@ -549,6 +553,13 @@ final class TransitionRunner {
         return CGSize(width: layout.tuning.itemMaxSize.width * scale, height: layout.tuning.itemMaxSize.height * scale)
     }
 
+    /// Live thumbnails: the default 320 px, or more for a strip made larger than that.
+    private var livePixelSize: CGSize {
+        let strip = stripSnapshotPixels
+        let side = max(Capture.defaultMaxPixelSize.width, strip.width, strip.height)
+        return CGSize(width: side, height: side)
+    }
+
     /// Shrinks the cached snapshots of just-parked windows, and gives their strip cards the
     /// small image once they come to rest (never mid-flight, where it would show as a pop).
     func shrinkParked(_ windows: [WindowRef]) {
@@ -587,8 +598,9 @@ final class TransitionRunner {
         let token = liveToken
         live[w] = .starting(token: token)
         let capture = self.capture
+        let pixels = livePixelSize
         Task { @MainActor [weak self] in
-            let handle = try? await capture.startLive(w, maxPixelSize: Capture.defaultMaxPixelSize,
+            let handle = try? await capture.startLive(w, maxPixelSize: pixels,
                                                       fps: Capture.defaultFPS) { [weak self] image in
                 MainActor.assumeIsolated { self?.liveFrame(image, for: w, token: token) }
             }

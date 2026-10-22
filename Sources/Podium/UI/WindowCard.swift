@@ -13,7 +13,17 @@ final class WindowCard {
     let layer = CALayer()
     private let content = CALayer()
     private let badge = CALayer()
-    private let tuning: Tuning
+    /// Live-changeable (Settings window): a new `appIconSize` resizes the badge.
+    var tuning: Tuning {
+        didSet {
+            guard tuning != oldValue else { return }
+            withoutActions {
+                badge.bounds = CGRect(x: 0, y: 0, width: tuning.appIconSize, height: tuning.appIconSize)
+                layoutBounds()
+                apply(pose)
+            }
+        }
+    }
 
     /// The pose last written by `apply`. The animator starts new springs from here.
     private(set) var pose: CardPose

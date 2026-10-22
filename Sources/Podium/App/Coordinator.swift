@@ -14,7 +14,9 @@ import struct PodiumCore.WindowRef
 final class Coordinator {
     private(set) var side: StripSide = .right
     private(set) var board: StageBoard
-    let tuning = Tuning.initial
+    private(set) var tuning = Tuning.initial
+    /// Strip cards carry an app-icon badge.
+    private(set) var showAppIcons = true
 
     private let backend: AXWindowBackend
     private let mover: WindowMover
@@ -92,6 +94,7 @@ final class Coordinator {
             self?.publishMinimizeState()
             self?.checkFocus(after: $0)
         }
+        runner.showAppIcons = showAppIcons
         self.runner = runner
         let presenter = StripPresenter(mover: mover, runner: runner,
                                        board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
@@ -405,6 +408,18 @@ final class Coordinator {
         runner?.update(layout: layout)
         presenter?.boardChanged()
         publishMinimizeState()
+    }
+
+    /// Applies the Settings window's thumbnail size, tilt and app icons; every card
+    /// retargets live, through springs, and the band (panel, hit targets) follows.
+    func setCustomization(_ customization: StripCustomization) {
+        let newTuning = customization.applied(to: .initial)
+        guard newTuning != tuning || customization.showAppIcons != showAppIcons else { return }
+        tuning = newTuning
+        showAppIcons = customization.showAppIcons
+        runner?.showAppIcons = showAppIcons
+        runner?.update(layout: layout)
+        presenter?.boardChanged()
     }
 
     /// Launch finished (windows parked, events observed) and not stopped.
