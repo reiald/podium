@@ -16,7 +16,9 @@ final class OnboardingModel: ObservableObject {
     var onStageManagerTurnedOff: () -> Void = {}
     private var timer: Timer?
 
-    var ready: Bool { accessibility && screenRecording }
+    var permissionsGranted: Bool { accessibility && screenRecording }
+    /// Podium can run: both permissions, and Apple's Stage Manager off.
+    var ready: Bool { permissionsGranted && !appleStageManagerOn }
 
     func startPolling() {
         guard timer == nil else { return }
@@ -107,8 +109,9 @@ struct OnboardingView: View {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text("Apple's Stage Manager is on").font(.headline)
-                        Text("Turn Stage Manager off, then come back.")
+                        Text("Podium can't run alongside it, so it stays paused with your windows in place. Turn Stage Manager off, then come back.")
                             .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                     Button("Open Stage Manager settings", action: model.openStageManagerSettings)
@@ -116,7 +119,9 @@ struct OnboardingView: View {
             }
 
             HStack {
-                Text(model.ready ? "All set." : "Waiting for both permissions...")
+                Text(model.ready ? "All set."
+                     : model.permissionsGranted ? "Waiting for Apple's Stage Manager to be turned off..."
+                     : "Waiting for both permissions...")
                     .foregroundStyle(.secondary)
                 Spacer()
                 Button("Done", action: onDone)

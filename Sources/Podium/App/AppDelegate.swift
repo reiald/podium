@@ -14,6 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var debugHold = false
     private var axWasTrusted = false
     private var hadPermissions = false
+    /// Apple's Stage Manager read as on at the last tick.
+    private var appleStageManagerWasOn = false
     private var alertShowing = false
     private var statusItem: NSStatusItem?
     private let backend = AXWindowBackend()
@@ -49,8 +51,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // A previous run (or crash) may have left windows parked.
         axWasTrusted = AXIsProcessTrusted()
         hadPermissions = hasPermissions
+        appleStageManagerWasOn = AppleStageManager.isEnabled
         if axWasTrusted { mover.recover(visibleScreens: backend.visibleScreens()) }
-        if !hasPermissions || !settings.onboarded { showOnboarding() }
+        if !hasPermissions || !settings.onboarded || (settings.enabled && appleStageManagerWasOn) { showOnboarding() }
         syncCoordinator()
 
         // One poll covers everything permission-related: the first grant, a revoke while
@@ -72,9 +75,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var hasPermissions: Bool { AXIsProcessTrusted() && CGPreflightScreenCaptureAccess() }
 
-    /// Podium manages windows only when it is on, both permissions are granted and the
-    /// onboarding was completed.
-    private var shouldManage: Bool { settings.enabled && settings.onboarded && hasPermissions }
+    /// Set up: both permissions granted, onboarding completed, and Apple's Stage Manager off
+    /// (two Stage Managers would fight over every window).
+    private var ready: Bool { hasPermissions && settings.onboarded && !AppleStageManager.isEnabled }
+
+    /// Podium manages windows only when it is on and set up.
+    private var shouldManage: Bool { settings.enabled && ready }
 
     private func tick() {
         let ax = AXIsProcessTrusted()
@@ -96,6 +102,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         hadPermissions = permitted
         if alertShowing { return }
+        // Apple's Stage Manager turned on while Podium runs: `syncCoordinator` takes the Off
+        // path (every window restored) and the onboarding window says why.
+        let appleStageManagerOn = AppleStageManager.isEnabled
+        if appleStageManagerOn, !appleStageManagerWasOn, settings.enabled, onboarding?.isShowing != true {
+            NSLog("Podium: Apple's Stage Manager is on; restoring windows and pausing")
+            showOnboarding()
+        }
+        appleStageManagerWasOn = appleStageManagerOn
         syncCoordinator()
     }
 
@@ -131,9 +145,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Starts or stops the Coordinator so it matches `shouldManage`.
     private func syncCoordinator() {
         guard debugHold == false else { return }
-        if shouldManage, coordinator == nil {
+        let manage = shouldManage
+        if manage, coordinator == nil {
             startManaging()
-        } else if !shouldManage, let coordinator {
+        } else if !manage, let coordinator {
             if AXIsProcessTrusted() { coordinator.restoreAll() } else { coordinator.suspend() }
             self.coordinator = nil
         }
@@ -189,7 +204,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Menu actions
 
     @objc private func togglePodium() {
-        if !settings.enabled, !(hasPermissions && settings.onboarded) {
+        if !settings.enabled, !ready {
             settings.enabled = true
             showOnboarding()
             return
@@ -279,7 +294,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
-        let ready = hasPermissions && settings.onboarded
         menuItems[.power]?.title = settings.enabled ? "Turn Podium Off" : "Turn Podium On"
         menuItems[.setUp]?.isHidden = ready
         menuItems[.left]?.state = settings.side == .left ? .on : .off
