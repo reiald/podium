@@ -95,6 +95,11 @@ final class TransitionRunner {
     }
     private var live: [WindowRef: Live] = [:]
     private var liveToken = 0
+    /// The pixel size each stream was started with (fixed for a stream's life).
+    private var livePixels: [WindowRef: CGSize] = [:]
+    /// Restarts streams at a new strip size once the size stops changing (a slider drag).
+    private var liveResize: DispatchWorkItem?
+    private static let liveResizeDelay: TimeInterval = 0.3
 
     /// Nil when there is no display to draw on.
     init?(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger, capture: Capture,
@@ -125,9 +130,11 @@ final class TransitionRunner {
     /// Re-places every strip card (strip order, side, pile, size, tilt, badge) without a
     /// model change.
     func update(layout: Layout) {
+        let resized = layout.tuning.itemMaxSize != self.layout.tuning.itemMaxSize
         self.layout = layout
         for t in tracks.values { t.card.tuning = layout.tuning }
         relayoutStrip(spring: layout.tuning.transitionSpring)
+        if resized { scheduleLiveResize() }
     }
 
     func setHovered(_ id: UUID?) {
@@ -165,6 +172,8 @@ final class TransitionRunner {
         for w in Array(tracks.keys) { drop(w) }
         for w in Array(live.keys) { stopLive(w) }
         pendingLeave = [:]
+        liveResize?.cancel()
+        liveResize = nil
         overlay.hide()
         animator.invalidate()
     }
@@ -593,12 +602,30 @@ final class TransitionRunner {
         for w in wanted where live[w] == nil { startLive(w) }
     }
 
+    /// After the strip size settles, streams started at another pixel size are restarted
+    /// (stop, then `syncLive` starts them again); not on every slider tick.
+    private func scheduleLiveResize() {
+        liveResize?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.liveResize = nil
+                let pixels = self.livePixelSize
+                for w in Array(self.live.keys) where self.livePixels[w] != pixels { self.stopLive(w) }
+                self.syncLive()
+            }
+        }
+        liveResize = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.liveResizeDelay, execute: work)
+    }
+
     private func startLive(_ w: WindowRef) {
         liveToken += 1
         let token = liveToken
         live[w] = .starting(token: token)
         let capture = self.capture
         let pixels = livePixelSize
+        livePixels[w] = pixels
         Task { @MainActor [weak self] in
             let handle = try? await capture.startLive(w, maxPixelSize: pixels,
                                                       fps: Capture.defaultFPS) { [weak self] image in
@@ -614,6 +641,7 @@ final class TransitionRunner {
     }
 
     private func stopLive(_ w: WindowRef) {
+        livePixels[w] = nil
         guard let state = live.removeValue(forKey: w), case let .running(handle, _) = state else { return }
         let capture = self.capture
         Task { await capture.stopLive(handle) }

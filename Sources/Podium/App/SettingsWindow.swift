@@ -85,7 +85,7 @@ final class SettingsWindowController {
 
     func show() {
         if window == nil {
-            let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(settings: settings)))
+            let w = SettingsNSWindow(contentViewController: NSHostingController(rootView: SettingsView(settings: settings)))
             w.title = "Podium Settings"
             w.styleMask = [.titled, .closable]
             w.isReleasedWhenClosed = false
@@ -94,5 +94,17 @@ final class SettingsWindowController {
         }
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+    }
+}
+
+/// Podium has no main menu (LSUIElement), so Cmd-W is handled here.
+private final class SettingsNSWindow: NSWindow {
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+           event.charactersIgnoringModifiers == "w" {
+            performClose(nil)
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
     }
 }

@@ -245,6 +245,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// delivering while a slider is tracking.
     private func observeSettings() {
         func apply<T>(_ publisher: Published<T>.Publisher, _ body: @escaping (Coordinator, T) -> Void) -> AnyCancellable {
+            // `@Published` sinks fire at willSet: use `value`, not `settings`, inside.
             publisher.dropFirst().sink { [weak self] value in
                 MainActor.assumeIsolated {
                     if let coordinator = self?.coordinator { body(coordinator, value) }
