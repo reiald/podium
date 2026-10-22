@@ -86,6 +86,16 @@ final class TransitionRunner {
     private var restoreFrames: [WindowRef: CGRect] = [:]
     private var icons: [pid_t: NSImage] = [:]
 
+    /// Live thumbnail streams of windows with a visible strip card.
+    private enum Live {
+        case starting(token: Int)
+        case running(LiveHandle, token: Int)
+        /// Could not start; not retried until the card goes away and comes back.
+        case failed
+    }
+    private var live: [WindowRef: Live] = [:]
+    private var liveToken = 0
+
     /// Nil when there is no display to draw on.
     init?(backend: AXWindowBackend, mover: WindowMover, ledger: ParkingLedger, capture: Capture,
           unparkRetry: UnparkRetry, layout: Layout, board: @escaping () -> StageBoard) {
@@ -151,6 +161,7 @@ final class TransitionRunner {
     /// is restored). No pending phase acts afterwards: they all check their track.
     func shutdown() {
         for w in Array(tracks.keys) { drop(w) }
+        for w in Array(live.keys) { stopLive(w) }
         pendingLeave = [:]
         overlay.hide()
         animator.invalidate()
@@ -191,6 +202,7 @@ final class TransitionRunner {
                 return
             }
             t.move(to: .entering)
+            stopLive(w)
             let generation = t.generation
             t.card.appIcon = nil
             setZ(t.card, Self.transitionZ)
@@ -223,7 +235,7 @@ final class TransitionRunner {
                 self.unparkNow([w])
                 return
             }
-            let card = self.makeCard(image: image)
+            let card = self.makeCard(image: image, pointWidth: frame.width)
             let index = min(placement.index, max(0, self.layout.tuning.pileMaxWindows - 1))
             var start = self.stripPose(card: card, slot: placement.slot, stage: placement.stage, index: index)
             start.alpha = 0
@@ -319,7 +331,7 @@ final class TransitionRunner {
                 instant.append(w)
                 continue
             }
-            let card = makeCard(image: image)
+            let card = makeCard(image: image, pointWidth: frame.width)
             card.apply(framePose(frame, card: card))
             setZ(card, Self.transitionZ)
             overlay.add(card)
@@ -343,6 +355,7 @@ final class TransitionRunner {
 
     private func parkPrepared(_ ready: [(WindowRef, Int)]) {
         var touched: [WindowRef] = []
+        var parked: [WindowRef] = []
         for (w, generation) in ready {
             guard let t = tracks[w], t.phase == .preparing, t.generation == generation else { continue }
             if backend.isMinimized(w) {
@@ -368,6 +381,7 @@ final class TransitionRunner {
             if mover.park(w, display: screen.frame, displayID: screen.id,
                           restoreFrame: restoreFrames.removeValue(forKey: w)) {
                 t.move(to: .strip)
+                parked.append(w)
             } else {
                 // The window is back on stage under its card; nothing to fly back from.
                 logger.error("could not park \(w.windowID, privacy: .public) (pid \(w.pid, privacy: .public)); leaving it on screen")
@@ -376,21 +390,26 @@ final class TransitionRunner {
         }
         onBatchEnd(touched)
         relayoutStrip(spring: layout.tuning.transitionSpring)
+        shrinkParked(parked)
     }
 
     // MARK: - Instant moves (no snapshot)
 
     private func parkNow(_ windows: [WindowRef]) {
         var touched: [WindowRef] = []
+        var parked: [WindowRef] = []
         for w in windows where !mover.isParked(w) && !backend.isMinimized(w) {
             guard let frame = backend.frame(of: w), let screen = Screens.containing(frame) else { continue }
             touched.append(w)
-            if !mover.park(w, display: screen.frame, displayID: screen.id,
-                           restoreFrame: restoreFrames.removeValue(forKey: w)) {
+            if mover.park(w, display: screen.frame, displayID: screen.id,
+                          restoreFrame: restoreFrames.removeValue(forKey: w)) {
+                parked.append(w)
+            } else {
                 logger.error("could not park \(w.windowID, privacy: .public) (pid \(w.pid, privacy: .public)); leaving it on screen")
             }
         }
         onBatchEnd(touched)
+        shrinkParked(parked)
     }
 
     private func unparkNow(_ windows: [WindowRef]) {
@@ -446,6 +465,7 @@ final class TransitionRunner {
                 }
             }
         }
+        syncLive()
     }
 
     private func isVisibleInStrip(_ w: WindowRef) -> Bool {
@@ -495,7 +515,7 @@ final class TransitionRunner {
             self.fetching.remove(w)
             guard let image, self.tracks[w] == nil, self.mover.isParked(w), self.isVisibleInStrip(w),
                   let stage = self.board().visibleStripStages.first(where: { $0.windows.contains(w) }) else { return }
-            let card = self.makeCard(image: image)
+            let card = self.makeCard(image: image, pointWidth: self.originalFrame(of: w)?.width)
             let slots = stripSlots(for: self.board().visibleStripStages, in: self.layout.screen,
                                    side: self.layout.side, tuning: self.layout.tuning)
             var start = self.stripPose(card: card, slot: slots.first { $0.stageID == stage.id }, stage: stage,
@@ -508,12 +528,96 @@ final class TransitionRunner {
         }
     }
 
+    // MARK: - Snapshot memory and live thumbnails
+
+    /// Parked windows' snapshots are kept at about twice the strip slot's point size (in
+    /// pixels): full-res ones cost tens of MB each. Only on-stage windows stay full-res.
+    private var stripSnapshotPixels: CGSize {
+        let scale = max(2, overlay.screen.backingScaleFactor)
+        return CGSize(width: layout.tuning.itemMaxSize.width * scale, height: layout.tuning.itemMaxSize.height * scale)
+    }
+
+    /// Shrinks the cached snapshots of just-parked windows, and gives their strip cards the
+    /// small image once they come to rest (never mid-flight, where it would show as a pop).
+    func shrinkParked(_ windows: [WindowRef]) {
+        guard !windows.isEmpty else { return }
+        let capture = self.capture
+        let bound = stripSnapshotPixels
+        Task { @MainActor [weak self] in
+            let small = await capture.shrinkSnapshots(windows, maxPixelSize: bound)
+            guard let self else { return }
+            for (w, image) in small {
+                guard let t = self.tracks[w], t.phase == .strip else { continue }
+                let generation = t.generation
+                self.animator.onSettled(t.card) { [weak self] in
+                    guard let self, let t = self.tracks[w], t.phase == .strip, t.generation == generation,
+                          self.mover.isParked(w) else { return }
+                    // A live stream may have delivered a newer frame meanwhile; keep that.
+                    if case .running? = self.live[w] { return }
+                    t.card.image = image
+                }
+            }
+        }
+    }
+
+    /// Streams live thumbnails (5 fps, 320 px) for exactly the windows whose strip card is
+    /// visible: not while hidden, entering, tucked away, or after the card is gone.
+    private func syncLive() {
+        let wanted: Set<WindowRef> = isHidden || !CGPreflightScreenCaptureAccess() ? [] : Set(tracks.compactMap { w, t in
+            t.phase == .strip && mover.isParked(w) && isVisibleInStrip(w) ? w : nil
+        })
+        for w in Array(live.keys) where !wanted.contains(w) { stopLive(w) }
+        for w in wanted where live[w] == nil { startLive(w) }
+    }
+
+    private func startLive(_ w: WindowRef) {
+        liveToken += 1
+        let token = liveToken
+        live[w] = .starting(token: token)
+        let capture = self.capture
+        Task { @MainActor [weak self] in
+            let handle = try? await capture.startLive(w, maxPixelSize: Capture.defaultMaxPixelSize,
+                                                      fps: Capture.defaultFPS) { [weak self] image in
+                MainActor.assumeIsolated { self?.liveFrame(image, for: w, token: token) }
+            }
+            guard let self, case let .starting(current)? = self.live[w], current == token else {
+                // Stopped while starting (card gone, entering, or shutdown).
+                if let handle { await capture.stopLive(handle) }
+                return
+            }
+            self.live[w] = handle.map { .running($0, token: token) } ?? .failed
+        }
+    }
+
+    private func stopLive(_ w: WindowRef) {
+        guard let state = live.removeValue(forKey: w), case let .running(handle, _) = state else { return }
+        let capture = self.capture
+        Task { await capture.stopLive(handle) }
+    }
+
+    /// A live frame for a strip card. Dropped while the card is moving (a resolution change
+    /// mid-flight would show); the next frame comes 200 ms later.
+    private func liveFrame(_ image: CGImage, for w: WindowRef, token: Int) {
+        switch live[w] {
+        case let .starting(t)? where t == token, let .running(_, t)? where t == token:
+            break
+        default:
+            return
+        }
+        guard let track = tracks[w], track.phase == .strip, !animator.isAnimating(track.card) else { return }
+        track.card.image = image
+    }
+
     // MARK: - Cards
 
-    private func makeCard(image: CGImage) -> WindowCard {
-        // Always the snapshot's point size: `contentsGravity = .resize` distorts otherwise.
+    /// The card is the window's point size (`pointWidth`, when known; else the snapshot's),
+    /// with the snapshot's aspect ratio: `contentsGravity = .resize` distorts otherwise, and
+    /// a downscaled or live image must not change how big the card is.
+    private func makeCard(image: CGImage, pointWidth: CGFloat?) -> WindowCard {
         let scale = overlay.screen.backingScaleFactor
-        let size = CGSize(width: max(1, CGFloat(image.width) / scale), height: max(1, CGFloat(image.height) / scale))
+        let pixels = CGSize(width: max(1, CGFloat(image.width)), height: max(1, CGFloat(image.height)))
+        let width = max(1, pointWidth ?? pixels.width / scale)
+        let size = CGSize(width: width, height: max(1, width * pixels.height / pixels.width))
         let card = WindowCard(size: size, side: layout.side, tuning: layout.tuning)
         card.image = image
         return card
@@ -533,6 +637,7 @@ final class TransitionRunner {
 
     private func drop(_ w: WindowRef) {
         pendingLeave[w] = nil
+        stopLive(w)
         guard let t = tracks.removeValue(forKey: w) else { return }
         animator.cancel(t.card)
         overlay.remove(t.card)

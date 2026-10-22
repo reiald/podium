@@ -129,6 +129,36 @@ actor Capture {
         }
     }
 
+    /// Parked windows only need a strip-sized snapshot. Replaces each cached snapshot larger
+    /// than `maxPixelSize` with a downscaled copy (aspect kept) and returns the cached images.
+    func shrinkSnapshots(_ windows: [WindowRef], maxPixelSize: CGSize) -> [WindowRef: CGImage] {
+        var result: [WindowRef: CGImage] = [:]
+        for w in windows {
+            guard let image = snapshots[w] else { continue }
+            let target = Self.fit(CGSize(width: image.width, height: image.height), within: maxPixelSize)
+            if Int(target.width) < image.width || Int(target.height) < image.height,
+               let small = Self.downscale(image, to: target) {
+                snapshots[w] = small
+                result[w] = small
+            } else {
+                result[w] = image
+            }
+        }
+        return result
+    }
+
+    private static func downscale(_ image: CGImage, to size: CGSize) -> CGImage? {
+        let space = image.colorSpace.flatMap { $0.model == .rgb ? $0 : nil } ?? CGColorSpace(name: CGColorSpace.sRGB)
+        guard let space,
+              let context = CGContext(data: nil, width: Int(size.width), height: Int(size.height), bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(origin: .zero, size: size))
+        return context.makeImage()
+    }
+
     /// Drops a closed window's cached snapshot.
     func forget(_ w: WindowRef) {
         snapshots[w] = nil

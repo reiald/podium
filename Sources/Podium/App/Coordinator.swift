@@ -592,8 +592,11 @@ final class Coordinator {
         }
     }
 
-    /// Parks; a window that fails stays on screen and in its stage.
+    /// Parks; a window that fails stays on screen and in its stage. Parked windows' cached
+    /// snapshots are shrunk to strip size.
     private func hide(_ windows: [WindowRef]) {
+        var parked: [WindowRef] = []
+        defer { shrinkSnapshots(of: parked) }
         for w in windows where !mover.isParked(w) && !backend.isMinimized(w) {
             guard let frame = backend.frame(of: w) else {
                 NSLog("Podium: cannot read frame of %u (pid %d); not parking", w.windowID, w.pid)
@@ -604,9 +607,23 @@ final class Coordinator {
                 continue
             }
             batchTouched.insert(w)
-            if !mover.park(w, display: screen.frame, displayID: screen.id) {
+            if mover.park(w, display: screen.frame, displayID: screen.id) {
+                parked.append(w)
+            } else {
                 NSLog("Podium: could not park %u (pid %d); leaving it on screen", w.windowID, w.pid)
             }
+        }
+    }
+
+    private func shrinkSnapshots(of parked: [WindowRef]) {
+        guard !parked.isEmpty else { return }
+        if let runner {
+            runner.shrinkParked(parked)
+        } else {
+            let capture = self.capture
+            let tuning = self.tuning
+            let bound = CGSize(width: tuning.itemMaxSize.width * 2, height: tuning.itemMaxSize.height * 2)
+            Task { _ = await capture.shrinkSnapshots(parked, maxPixelSize: bound) }
         }
     }
 
@@ -662,8 +679,18 @@ final class Coordinator {
         let live = backend.liveWindows()
         // An empty answer means the query failed; forget nothing.
         if !live.isEmpty {
-            for w in board.stages.flatMap(\.windows) where !live.contains(w) { board.windowClosed(w) }
-            for e in ledger.entries() where !live.contains(e.window) { mover.forget(e.window) }
+            let capture = self.capture
+            var dropped: [WindowRef] = []
+            for w in board.stages.flatMap(\.windows) where !live.contains(w) {
+                board.windowClosed(w)
+                runner?.forget(w)
+                dropped.append(w)
+            }
+            for e in ledger.entries() where !live.contains(e.window) {
+                mover.forget(e.window)
+                dropped.append(e.window)
+            }
+            if !dropped.isEmpty { Task { for w in dropped { await capture.forget(w) } } }
         }
         let activeBefore = board.activeStageID
         for w in onScreenWindowsBackToFront() where !isOnBoard(w) { board.windowOpened(w) }
