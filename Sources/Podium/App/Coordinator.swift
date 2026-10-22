@@ -46,6 +46,8 @@ final class Coordinator {
     /// Windows the minimize fallback is bringing back from the Dock, until the given time:
     /// their own (de)minimize and focus noise must not move stages meanwhile.
     private var unminimizing: [WindowRef: Date] = [:]
+    /// The focus macOS hands on after a close is not followed into the strip.
+    private var closeFocus = CloseFocus()
     /// Windows the fallback gave up on: their `.minimized` takes the Dock path.
     private var dockFallback: Set<WindowRef> = []
     private static let unminimizePoll: TimeInterval = 0.02
@@ -587,6 +589,7 @@ final class Coordinator {
                 }
                 return
             case let .closed(forgetLedger):
+                closeFocus.closed(at: CACurrentMediaTime())
                 board.windowClosed(w)
                 runner?.forget(w)
                 // A failed list query (empty answer) keeps the ledger entry.
@@ -598,6 +601,7 @@ final class Coordinator {
             // Parked windows count: Cmd-`, the Window menu, the Dock and Mission Control
             // focus them, and that must bring their stage forward. Minimized ones don't.
             guard !isInFlight(w), !isUnminimizing(w), !backend.isMinimized(w) else { return }
+            if closeFocus.ignores(w, at: CACurrentMediaTime(), board: board) { return keepStageAfterClose(from: w) }
             if !isOnBoard(w) {
                 // A window we never saw open (e.g. on another Space at launch).
                 guard shouldManage(w) else { return }
@@ -622,6 +626,9 @@ final class Coordinator {
             board.deminimize(w)
         case let .appActivated(pid):
             guard pid != getpid() else { return }
+            if closeFocus.ignores(appActivated: pid, at: CACurrentMediaTime(), board: board) {
+                return keepStageAfterClose(from: nil)
+            }
             // Prefer the window the app actually focused; fall back to its most recent one.
             // A window Podium just moved doesn't count: after `select`, the app can still
             // report the window that was just parked.
@@ -632,6 +639,7 @@ final class Coordinator {
                 board.appActivated(pid: pid)
             }
         case let .appTerminated(pid):
+            closeFocus.closed(at: CACurrentMediaTime())
             board.appTerminated(pid: pid)
             let capture = self.capture
             Task { await capture.forgetApp(pid: pid) }
@@ -641,6 +649,15 @@ final class Coordinator {
     }
 
     private static let closeRecheckDelay: TimeInterval = 0.5
+
+    /// macOS focused a strip window after a close: the stage stays as it is, and keyboard
+    /// focus goes back to it (or the desktop) instead of the invisible window.
+    private func keepStageAfterClose(from w: WindowRef?) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isRunning else { return }
+            self.handOffFocus(from: w)
+        }
+    }
 
     /// Puts back parked windows no stage owns: a previous run (or crash) parked them on
     /// another Space, where AX couldn't reach them at launch, so recovery kept their entries.
