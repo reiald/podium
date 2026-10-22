@@ -351,3 +351,189 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     #expect(slots.count == 1)
     #expect(slots.first?.stageID == b.stages.first { $0.windows == [w(1, 10)] }?.id)
 }
+
+// MARK: - One at a Time
+
+private func oneAtATime() -> StageBoard {
+    var b = board()
+    b.setGrouping(.oneAtATime)
+    return b
+}
+
+/// Board with app 1's windows 10, 11, 12 opened in that order, then app 2's window 20.
+private func threeWindowsThenOther() -> StageBoard {
+    var b = oneAtATime()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.windowOpened(w(1, 12))
+    b.windowOpened(w(2, 20))
+    return b
+}
+
+@Test func groupingDefaultsToAllAtOnce() {
+    #expect(board().grouping == .allAtOnce)
+    #expect(WindowGrouping(rawValue: "oneAtATime") == .oneAtATime)
+    #expect(WindowGrouping(rawValue: "bogus") == nil)
+}
+
+@Test func oneAtATimeAppActivationShowsOnlyMostRecentWindow() {
+    var b = threeWindowsThenOther()
+    #expect(b.activeStage?.windows == [w(2, 20)])
+    b.appActivated(pid: 1)
+    #expect(b.activeStage?.windows == [w(1, 12)])
+    b.windowFocused(w(2, 20))
+    b.appActivated(pid: 1)
+    #expect(b.activeStage?.windows == [w(1, 12)])
+}
+
+@Test func oneAtATimeOtherWindowsFormOnePile() {
+    var b = threeWindowsThenOther()
+    #expect(b.stripStages.count == 1)
+    #expect(b.stripStages[0].windows == [w(1, 12), w(1, 11), w(1, 10)])
+    b.appActivated(pid: 1)
+    #expect(b.stripStages.map(\.windows) == [[w(2, 20)], [w(1, 11), w(1, 10)]])
+}
+
+@Test func clickingPileCyclesThroughAppWindows() {
+    var b = threeWindowsThenOther()
+    b.appActivated(pid: 1)                     // 12 on stage, pile [11, 10]
+    let pile = { (b: StageBoard) in b.stripStages.first { $0.windows.allSatisfy { $0.pid == 1 } }! }
+    b.select(stageID: pile(b).id)
+    #expect(b.activeStage?.windows == [w(1, 11)])
+    #expect(pile(b).windows == [w(1, 10), w(1, 12)])
+    b.select(stageID: pile(b).id)
+    #expect(b.activeStage?.windows == [w(1, 10)])
+    b.select(stageID: pile(b).id)
+    #expect(b.activeStage?.windows == [w(1, 12)])
+    #expect(b.stripStages.count == 2)          // app 2's stage and app 1's one pile
+    // A pile click from another app's stage: that stage goes to the strip as usual.
+    b.windowFocused(w(2, 20))
+    b.select(stageID: pile(b).id)
+    #expect(b.activeStage?.windows.count == 1)
+    #expect(b.activeStage?.windows.first?.pid == 1)
+    #expect(b.stripStages.contains { $0.windows == [w(2, 20)] })
+}
+
+@Test func selectingSingleWindowStageInOneAtATimeActivatesIt() {
+    var b = threeWindowsThenOther()
+    b.appActivated(pid: 1)
+    let other = b.stripStages.first { $0.windows == [w(2, 20)] }!.id
+    b.select(stageID: other)
+    #expect(b.activeStageID == other)
+    #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 11), w(1, 10)]])
+}
+
+@Test func newWindowTakesStageAndPreviousJoinsPile() {
+    var b = oneAtATime()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    #expect(b.activeStage?.windows == [w(1, 11)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 10)]])
+    b.windowOpened(w(1, 12))
+    #expect(b.activeStage?.windows == [w(1, 12)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 11), w(1, 10)]])
+}
+
+@Test func newWindowInCombinedStageReplacesOnlyItsAppsWindow() {
+    var b = oneAtATime()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.addToActiveStage(w(1, 10))               // manual combine: 20 + 10 on stage
+    b.windowOpened(w(1, 11))
+    #expect(Set(b.activeStage!.windows) == [w(2, 20), w(1, 11)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 10)]])
+}
+
+@Test func focusingParkedWindowPutsExactlyItOnStage() {
+    var b = threeWindowsThenOther()
+    b.appActivated(pid: 1)                     // 12 on stage, pile [11, 10]
+    b.windowFocused(w(1, 10))                  // Cmd-` to a parked window
+    #expect(b.activeStage?.windows == [w(1, 10)])
+    let pile = b.stripStages.first { $0.windows.allSatisfy { $0.pid == 1 } }!
+    #expect(pile.windows == [w(1, 12), w(1, 11)])
+    #expect(b.stripStages.count == 2)
+}
+
+@Test func shiftClickAddsOnlyPilesFrontWindow() {
+    var b = threeWindowsThenOther()             // 20 on stage, pile [12, 11, 10]
+    let pile = b.stripStages[0].id
+    let front = b.stripStages[0].windows[0]
+    b.addToActiveStage(front)
+    #expect(Set(b.activeStage!.windows) == [w(2, 20), w(1, 12)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 11), w(1, 10)]])
+    // Drag-to-stage of a pile: only its front window too.
+    b.combineIntoActive(stageID: pile)
+    #expect(Set(b.activeStage!.windows) == [w(2, 20), w(1, 12), w(1, 11)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 10)]])
+}
+
+@Test func minimizeJoinsAppPile() {
+    var b = threeWindowsThenOther()
+    b.appActivated(pid: 1)                     // 12 on stage, pile [11, 10]
+    b.moveToPile(w(1, 12))
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.first?.windows == [w(1, 12), w(1, 11), w(1, 10)])
+    #expect(b.stripStages.count == 2)
+    // With other windows on stage, the rest stays.
+    b.windowFocused(w(2, 20))
+    b.addToActiveStage(w(1, 12))
+    b.moveToPile(w(1, 12))
+    #expect(b.activeStage?.windows == [w(2, 20)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 11), w(1, 10)]])
+}
+
+@Test func dockMinimizedWindowStaysOutOfPile() {
+    var b = threeWindowsThenOther()
+    b.appActivated(pid: 1)                     // 12 on stage, pile [11, 10]
+    b.minimize(w(1, 12))
+    #expect(b.stripStages.first?.windows == [w(1, 12)])
+    #expect(b.stripStages.contains { $0.windows == [w(1, 11), w(1, 10)] })
+    b.appActivated(pid: 1)                     // never picks the minimized window
+    #expect(b.activeStage?.windows == [w(1, 11)])
+    b.deminimize(w(1, 12))
+    #expect(b.activeStage?.windows == [w(1, 12)])
+    #expect(b.stripStages.contains { $0.windows == [w(1, 11), w(1, 10)] })
+}
+
+@Test func switchingAllToOneSplitsAndOneToAllMerges() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))
+    b.windowFocused(w(1, 10))
+    b.addToActiveStage(w(2, 21))               // stage: 21, 10, 11; strip: [20]
+    #expect(b.activeStage?.windows == [w(2, 21), w(1, 10), w(1, 11)])
+    let activeID = b.activeStageID
+    let before = b
+    b.setGrouping(.oneAtATime)
+    #expect(b.grouping == .oneAtATime)
+    #expect(b.activeStageID == activeID)
+    #expect(b.activeStage?.windows == [w(2, 21), w(1, 10)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 11)], [w(2, 20)]])
+    #expect(transitionPlan(from: before, to: b).leaving == [w(1, 11)])
+    b.setGrouping(.allAtOnce)
+    #expect(b.activeStageID == activeID)
+    #expect(Set(b.activeStage!.windows) == [w(2, 21), w(1, 10), w(1, 11), w(2, 20)])
+    #expect(b.stripStages.isEmpty)
+}
+
+@Test func switchingToOneAtATimeMergesAppsStripStagesIntoOnePile() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.moveToOwnStage(w(1, 11))                 // app 1 split across two stages
+    b.windowOpened(w(2, 20))
+    #expect(b.stripStages.count == 2)
+    b.setGrouping(.oneAtATime)
+    #expect(b.stripStages.map(\.windows) == [[w(1, 11), w(1, 10)]])
+}
+
+@Test func closingWindowsKeepsOnePilePerApp() {
+    var b = threeWindowsThenOther()
+    b.windowClosed(w(1, 11))
+    #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 10)]])
+    b.appTerminated(pid: 1)
+    #expect(b.stripStages.isEmpty)
+    #expect(b.activeStage?.windows == [w(2, 20)])
+}

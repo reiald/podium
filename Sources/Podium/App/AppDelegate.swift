@@ -177,6 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.setSide(settings.side)
         coordinator.minimizeBehavior = settings.minimizeBehavior
         coordinator.autoHideEnabled = settings.autoHide
+        coordinator.setGrouping(settings.windowGrouping)
         coordinator.setCustomization(settings.customization)
         self.coordinator = coordinator
         coordinator.start()
@@ -256,6 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             apply(settings.$side) { $0.setSide($1) },
             apply(settings.$minimizeBehavior) { $0.minimizeBehavior = $1 },
             apply(settings.$autoHide) { $0.autoHideEnabled = $1 },
+            apply(settings.$windowGrouping) { $0.setGrouping($1) },
             settings.$customization.dropFirst()
                 .throttle(for: .seconds(1.0 / 60.0), scheduler: DispatchQueue.main, latest: true)
                 .sink { [weak self] value in

@@ -31,6 +31,10 @@ struct SettingsView: View {
                     .disabled(!settings.customization.showAppIcons)
             }
             Section("Windows") {
+                Picker("Show windows from an app", selection: $settings.windowGrouping) {
+                    Text("All at Once").tag(WindowGrouping.allAtOnce)
+                    Text("One at a Time").tag(WindowGrouping.oneAtATime)
+                }
                 Picker("Minimize to", selection: $settings.minimizeBehavior) {
                     Text("Strip").tag(MinimizeBehavior.strip)
                     Text("Dock").tag(MinimizeBehavior.dock)

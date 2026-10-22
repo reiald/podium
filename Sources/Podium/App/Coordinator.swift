@@ -215,10 +215,10 @@ final class Coordinator {
     func select(stageID: UUID) {
         guard isRunning, !applying else { return }
         let old = board
-        board.activate(stageID: stageID)
-        // Make its front window the app's most recent one, so the app activation that
+        // Makes its front window the app's most recent one, so the app activation that
         // follows maps back to this stage rather than another stage of the same app.
-        if let front = board.activeStage?.windows.first { board.windowFocused(front) }
+        // One at a Time, a pile's front window comes on stage alone.
+        board.select(stageID: stageID)
         apply(from: old)
         if let front = board.activeStage?.windows.first,
            let app = NSRunningApplication(processIdentifier: front.pid), !app.isActive {
@@ -250,10 +250,16 @@ final class Coordinator {
         guard isRunning, !applying, let previous = board.activeStageID,
               board.activeStage?.windows.contains(w) == true else { return }
         let old = board
-        board.moveToOwnStage(w)
+        if board.grouping == .oneAtATime {
+            // It joins its app's pile; a lone window stays, as with `moveToOwnStage`.
+            guard (board.activeStage?.windows.count ?? 0) > 1 else { return }
+            board.moveToPile(w)
+        } else {
+            board.moveToOwnStage(w)
+        }
         guard board != old else { return }
         runner?.setRestoreFrame(restoreTo, for: w)
-        board.activate(stageID: previous)
+        if board.grouping == .allAtOnce { board.activate(stageID: previous) }
         if let front = board.activeStage?.windows.first { board.windowFocused(front) }
         apply(from: old)
         // The dragged window is about to be parked and must not keep keyboard focus.
@@ -277,7 +283,11 @@ final class Coordinator {
             return false
         }
         let old = board
-        if count > 1 {
+        if board.grouping == .oneAtATime {
+            // It joins its app's pile at the front of the strip.
+            board.moveToPile(w)
+            if let front = board.activeStage?.windows.first { board.windowFocused(front) }
+        } else if count > 1 {
             board.moveToOwnStage(w)
             board.activate(stageID: previous)
             if let front = board.activeStage?.windows.first { board.windowFocused(front) }
@@ -420,6 +430,17 @@ final class Coordinator {
         runner?.showAppIcons = showAppIcons
         runner?.update(layout: layout)
         presenter?.boardChanged()
+    }
+
+    /// Settings' "Show windows from an app": the board restructures and the windows that
+    /// leave or join the stage move through the normal transition.
+    func setGrouping(_ grouping: WindowGrouping) {
+        guard grouping != board.grouping else { return }
+        let old = board
+        board.setGrouping(grouping)
+        // Before launch finishes, `finishStart`'s reconcile puts the screen in line.
+        guard isRunning else { return }
+        apply(from: old)
     }
 
     /// Launch finished (windows parked, events observed) and not stopped.

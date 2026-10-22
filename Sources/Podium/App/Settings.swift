@@ -13,6 +13,10 @@ final class Settings: ObservableObject {
         didSet { defaults.set(minimizeBehavior.rawValue, forKey: "minimizeBehavior") }
     }
     @Published var autoHide: Bool { didSet { defaults.set(autoHide, forKey: "autoHide") } }
+    /// "Show windows from an app": all at once or one at a time.
+    @Published var windowGrouping: WindowGrouping {
+        didSet { defaults.set(windowGrouping.rawValue, forKey: "appWindowGrouping") }
+    }
     /// The onboarding window was completed once.
     @Published var onboarded: Bool { didSet { defaults.set(onboarded, forKey: "onboarded") } }
     /// Podium turned Apple's Stage Manager off (so the menu offers to turn it back on).
@@ -37,6 +41,7 @@ final class Settings: ObservableObject {
         side = defaults.string(forKey: "side").flatMap(StripSide.init(rawValue:)) ?? .right
         minimizeBehavior = defaults.string(forKey: "minimizeBehavior").flatMap(MinimizeBehavior.init(rawValue:)) ?? .strip
         autoHide = defaults.object(forKey: "autoHide") as? Bool ?? true
+        windowGrouping = defaults.string(forKey: "appWindowGrouping").flatMap(WindowGrouping.init(rawValue:)) ?? .allAtOnce
         onboarded = defaults.bool(forKey: "onboarded")
         turnedOffAppleStageManager = defaults.bool(forKey: "turnedOffAppleStageManager")
         let d = StripCustomization.defaults
@@ -57,5 +62,6 @@ final class Settings: ObservableObject {
         side = .right
         minimizeBehavior = .strip
         autoHide = true
+        windowGrouping = .allAtOnce
     }
 }
