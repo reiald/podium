@@ -1,15 +1,13 @@
 import Foundation
 
-/// Reads and writes one boolean preference (the real implementation is CFPreferences on
-/// `com.apple.WindowManager`; tests inject a fake so nothing touches the real system).
+/// Reads one boolean preference (the real implementation is CFPreferences on
+/// `com.apple.WindowManager`, synchronized before each read; tests inject a fake).
+/// Podium never writes this domain: turning Stage Manager on or off is the user's job.
 public protocol StageManagerPreferences: Sendable {
     func bool(forKey key: String) -> Bool?
-    func setBool(_ value: Bool, forKey key: String)
-    /// Flushes writes; false if they could not be stored.
-    func synchronize() -> Bool
 }
 
-/// The on/off switch of Apple's Stage Manager, through an injected preferences store.
+/// Whether Apple's Stage Manager is on, through an injected preferences reader.
 public struct StageManagerSwitch: Sendable {
     public static let key = "GloballyEnabled"
 
@@ -21,18 +19,4 @@ public struct StageManagerSwitch: Sendable {
 
     /// A missing key means Stage Manager was never turned on.
     public var isEnabled: Bool { prefs.bool(forKey: Self.key) ?? false }
-
-    /// True if the preference reads back `false` afterwards. (Whether the system visibly
-    /// reacted is for the caller to check a moment later.)
-    @discardableResult
-    public func disable() -> Bool { set(false) }
-
-    @discardableResult
-    public func enable() -> Bool { set(true) }
-
-    private func set(_ value: Bool) -> Bool {
-        prefs.setBool(value, forKey: Self.key)
-        guard prefs.synchronize() else { return false }
-        return prefs.bool(forKey: Self.key) == value
-    }
 }

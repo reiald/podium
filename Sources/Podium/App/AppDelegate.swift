@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var accessibilityLost = false
     /// A debug flag parked windows by hand; no Coordinator may start.
     private var debugHold = false
+    private var axWasTrusted = false
+    private var hadPermissions = false
+    private var alertShowing = false
     private var statusItem: NSStatusItem?
     private let backend = AXWindowBackend()
     private lazy var ledger = ParkingLedger(fileURL: Self.ledgerURL)
@@ -44,7 +47,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         installSignalHandlers()
 
         // A previous run (or crash) may have left windows parked.
-        if AXIsProcessTrusted() { mover.recover(visibleScreens: backend.visibleScreens()) }
+        axWasTrusted = AXIsProcessTrusted()
+        hadPermissions = hasPermissions
+        if axWasTrusted { mover.recover(visibleScreens: backend.visibleScreens()) }
         if !hasPermissions || !settings.onboarded { showOnboarding() }
         syncCoordinator()
 
@@ -72,14 +77,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var shouldManage: Bool { settings.enabled && settings.onboarded && hasPermissions }
 
     private func tick() {
-        if coordinator != nil, !AXIsProcessTrusted() {
+        let ax = AXIsProcessTrusted()
+        if coordinator != nil, !ax {
+            axWasTrusted = false
             accessibilityRevoked()
             return
         }
-        if accessibilityLost, AXIsProcessTrusted() {
-            NSLog("Podium: Accessibility is back; recovering")
-            accessibilityLost = false
+        if ax, !axWasTrusted {
+            // Accessibility just (re)appeared: put back whatever is still parked, whether or
+            // not Podium is going to manage windows.
+            NSLog("Podium: Accessibility is available; recovering")
+            mover.recover(visibleScreens: backend.visibleScreens())
         }
+        axWasTrusted = ax
+        let permitted = hasPermissions
+        if permitted, !hadPermissions, !settings.onboarded, onboarding?.isShowing != true {
+            showOnboarding()
+        }
+        hadPermissions = permitted
+        if alertShowing { return }
         syncCoordinator()
     }
 
@@ -89,16 +105,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSLog("Podium: Accessibility revoked; suspending")
         coordinator?.suspend()
         coordinator = nil
-        accessibilityLost = true
-        let alert = NSAlert()
-        alert.messageText = "Podium lost Accessibility access"
-        alert.informativeText = "Podium can't move windows without it, so it has stopped. Your windows will be restored as soon as you grant Accessibility access again."
-        alert.addButton(withTitle: "Open Accessibility Settings")
-        alert.addButton(withTitle: "OK")
-        NSApp.activate(ignoringOtherApps: true)
-        if alert.runModal() == .alertFirstButtonReturn,
-           let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
+        showAccessibilityAlert(title: "Podium lost Accessibility access",
+                               text: "Podium can't move windows without it, so it has stopped. Your windows will be restored as soon as you grant Accessibility access again.")
+    }
+
+    /// One alert at a time, shown after the current run-loop pass.
+    private func showAccessibilityAlert(title: String, text: String) {
+        guard !alertShowing else { return }
+        alertShowing = true
+        DispatchQueue.main.async { [weak self] in
+            let alert = NSAlert()
+            alert.messageText = title
+            alert.informativeText = text
+            alert.addButton(withTitle: "Open Accessibility Settings")
+            alert.addButton(withTitle: "OK")
+            NSApp.activate(ignoringOtherApps: true)
+            let open = alert.runModal() == .alertFirstButtonReturn
+            self?.alertShowing = false
+            if open, let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                NSWorkspace.shared.open(url)
+            }
         }
     }
 
@@ -198,14 +224,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func restoreAll() {
         settings.enabled = false
         syncCoordinator()
-        if AXIsProcessTrusted() { mover.restoreAll() }
+        if AXIsProcessTrusted() {
+            mover.restoreAll()
+        } else {
+            showAccessibilityAlert(title: "Accessibility access is needed",
+                                   text: "Podium can't move windows without it. Any parked windows will be restored as soon as you grant Accessibility access again.")
+        }
     }
 
     @objc private func setUpPodium() { showOnboarding() }
 
+    /// Opens Desktop & Dock settings; the item disappears once Stage Manager reads as on.
     @objc private func turnAppleStageManagerBackOn() {
-        _ = AppleStageManager.enable()
-        settings.turnedOffAppleStageManager = false
+        AppleStageManager.enable()
     }
 
     // MARK: - Setup
@@ -256,7 +287,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menuItems[.minimizeStrip]?.state = settings.minimizeBehavior == .strip ? .on : .off
         menuItems[.minimizeDock]?.state = settings.minimizeBehavior == .dock ? .on : .off
         menuItems[.autoHide]?.state = settings.autoHide ? .on : .off
-        menuItems[.stageManager]?.isHidden = !(settings.turnedOffAppleStageManager && !AppleStageManager.isEnabled)
+        if settings.turnedOffAppleStageManager, AppleStageManager.isEnabled {
+            settings.turnedOffAppleStageManager = false
+        }
+        menuItems[.stageManager]?.isHidden = !settings.turnedOffAppleStageManager
     }
 
     private func installSignalHandlers() {

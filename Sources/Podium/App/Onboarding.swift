@@ -8,8 +8,12 @@ final class OnboardingModel: ObservableObject {
     @Published private(set) var accessibility = AXIsProcessTrusted()
     @Published private(set) var screenRecording = CGPreflightScreenCaptureAccess()
     @Published private(set) var appleStageManagerOn = AppleStageManager.isEnabled
-    /// Set after a failed attempt to turn Apple's Stage Manager off from here.
-    @Published private(set) var needsManualStageManagerOff = false
+    /// Screen Recording was requested from here and still reads false: macOS may only
+    /// register the grant after a relaunch.
+    @Published private(set) var screenRecordingRequested = false
+    /// The user was sent to Desktop & Dock settings to turn Stage Manager off.
+    private var awaitingStageManagerOff = false
+    var onStageManagerTurnedOff: () -> Void = {}
     private var timer: Timer?
 
     var ready: Bool { accessibility && screenRecording }
@@ -33,7 +37,10 @@ final class OnboardingModel: ObservableObject {
         accessibility = AXIsProcessTrusted()
         screenRecording = CGPreflightScreenCaptureAccess()
         appleStageManagerOn = AppleStageManager.isEnabled
-        if !appleStageManagerOn { needsManualStageManagerOff = false }
+        if awaitingStageManagerOff, !appleStageManagerOn {
+            awaitingStageManagerOff = false
+            onStageManagerTurnedOff()
+        }
     }
 
     /// Asking once makes macOS add Podium to the list; then the pane opens on it.
@@ -44,17 +51,21 @@ final class OnboardingModel: ObservableObject {
 
     func requestScreenRecording() {
         CGRequestScreenCaptureAccess()
+        screenRecordingRequested = true
         Self.open("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
     }
 
-    func turnOffAppleStageManager(didTurnOff: @escaping @MainActor () -> Void) {
-        AppleStageManager.disableOrOpenSettings { [weak self] off in
-            self?.refresh()
-            if off {
-                didTurnOff()
-            } else {
-                self?.needsManualStageManagerOff = true
-            }
+    func openStageManagerSettings() {
+        awaitingStageManagerOff = true
+        AppleStageManager.disable()
+    }
+
+    /// Starts a new instance, then quits this one (quitting restores any parked windows).
+    func quitAndReopen() {
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: Bundle.main.bundleURL, configuration: config) { _, _ in
+            DispatchQueue.main.async { NSApp.terminate(nil) }
         }
     }
 
@@ -65,7 +76,6 @@ final class OnboardingModel: ObservableObject {
 
 struct OnboardingView: View {
     @ObservedObject var model: OnboardingModel
-    var onTurnedOffAppleStageManager: () -> Void
     var onDone: () -> Void
 
     var body: some View {
@@ -82,27 +92,26 @@ struct OnboardingView: View {
                               granted: model.accessibility, action: model.requestAccessibility)
                 PermissionRow(title: "Screen Recording", detail: "Lets Podium draw live thumbnails of your windows. Nothing is recorded or sent anywhere.",
                               granted: model.screenRecording, action: model.requestScreenRecording)
+                if model.screenRecordingRequested, !model.screenRecording {
+                    HStack {
+                        Text("If you've turned it on and it still isn't ticked, macOS needs Podium to restart.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Quit & Reopen Podium", action: model.quitAndReopen)
+                    }
+                }
             }
 
             if model.appleStageManagerOn {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Apple's Stage Manager is on").font(.headline)
-                            Text("Turn it off so the two don't fight. You can turn it back on from Podium's menu.")
-                                .font(.callout).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Spacer()
-                        Button("Turn off Apple's Stage Manager") {
-                            model.turnOffAppleStageManager(didTurnOff: onTurnedOffAppleStageManager)
-                        }
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Apple's Stage Manager is on").font(.headline)
+                        Text("Turn Stage Manager off, then come back.")
+                            .font(.callout).foregroundStyle(.secondary)
                     }
-                    if model.needsManualStageManagerOff {
-                        Text("macOS didn't switch it off. In Desktop & Dock settings, turn off Stage Manager yourself.")
-                            .font(.callout).foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    Spacer()
+                    Button("Open Stage Manager settings", action: model.openStageManagerSettings)
                 }
             }
 
@@ -151,12 +160,11 @@ private struct PermissionRow: View {
 final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private let model = OnboardingModel()
-    private let onTurnedOffAppleStageManager: () -> Void
     /// The window ended: `true` for Done (or closed with everything granted).
     private let onFinish: (_ completed: Bool) -> Void
 
     init(onTurnedOffAppleStageManager: @escaping () -> Void, onFinish: @escaping (Bool) -> Void) {
-        self.onTurnedOffAppleStageManager = onTurnedOffAppleStageManager
+        model.onStageManagerTurnedOff = onTurnedOffAppleStageManager
         self.onFinish = onFinish
     }
 
@@ -164,7 +172,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
 
     func show() {
         if window == nil {
-            let view = OnboardingView(model: model, onTurnedOffAppleStageManager: onTurnedOffAppleStageManager) { [weak self] in
+            let view = OnboardingView(model: model) { [weak self] in
                 self?.close()
             }
             let w = NSWindow(contentViewController: NSHostingController(rootView: view))
@@ -177,6 +185,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         }
         model.refresh()
         NSApp.activate(ignoringOtherApps: true)
+        model.startPolling()
         window?.makeKeyAndOrderFront(nil)
     }
 
