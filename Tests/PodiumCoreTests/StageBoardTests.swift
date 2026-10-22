@@ -1,5 +1,6 @@
 import Testing
 import CoreGraphics
+import Foundation
 @testable import PodiumCore
 
 private func w(_ pid: Int32, _ id: UInt32) -> WindowRef { WindowRef(pid: pid, windowID: id) }
@@ -672,5 +673,79 @@ private func threeWindowsThenOther() -> StageBoard {
     let before = b
     b.show(w(1, 11))
     b.show(w(9, 90))
+    #expect(b == before)
+}
+
+@Test func showFromDesktopBringsWindowOnStageInBothGroupings() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.windowOpened(w(2, 20))
+    b.sendAppToStrip(pid: 2)                   // desktop
+    b.show(w(1, 10))
+    #expect(b.activeStage?.windows == [w(1, 10), w(1, 11)])
+    var one = threeWindowsThenOther()          // 20 on stage, pile [12, 11, 10]
+    one.sendAppToStrip(pid: 2)                 // desktop
+    one.show(w(1, 11))
+    #expect(one.activeStage?.windows == [w(1, 11)])
+    #expect(one.stripStages.contains { $0.windows == [w(1, 12), w(1, 10)] })
+}
+
+@Test func showOfWindowAlreadyOnStageOnlyBringsItToFront() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    let stage = b.activeStageID!
+    b.show(w(1, 10))
+    #expect(b.activeStageID == stage)
+    #expect(b.activeStage?.windows == [w(1, 10), w(1, 11)])
+    var one = oneAtATime()
+    one.windowOpened(w(1, 10))
+    one.windowOpened(w(2, 20))
+    one.addToActiveStage(w(1, 10))             // manual combine: 20 + 10 on stage
+    one.show(w(2, 20))
+    #expect(one.activeStage?.windows == [w(2, 20), w(1, 10)])
+    #expect(one.stripStages.isEmpty)
+}
+
+/// One at a Time: a hand-combined strip stage [10, 20] and app 3's window 30 on stage.
+private func mixedStripStage() -> (StageBoard, UUID) {
+    var b = oneAtATime()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.addToActiveStage(w(1, 10))
+    let mixed = b.activeStageID!
+    b.windowOpened(w(3, 30))
+    return (b, mixed)
+}
+
+@Test func dropOfPileGivesExactlyDraggedWindow() {
+    var b = threeWindowsThenOther()            // 20 on stage, pile [12, 11, 10]
+    b.combineIntoActive(stageID: b.stripStages[0].id, dragged: w(1, 11))
+    #expect(Set(b.activeStage!.windows) == [w(2, 20), w(1, 11)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 10)]])
+}
+
+@Test func dropOfMixedStageMergesItWhole() {
+    var (b, mixed) = mixedStripStage()
+    b.combineIntoActive(stageID: mixed, dragged: w(1, 10))
+    #expect(Set(b.activeStage!.windows) == [w(3, 30), w(1, 10), w(2, 20)])
+    #expect(b.stripStages.isEmpty)
+}
+
+@Test func dropOnDesktopSelectsTheWholeStage() {
+    var (b, mixed) = mixedStripStage()
+    b.sendAppToStrip(pid: 3)                   // desktop
+    b.combineIntoActive(stageID: mixed, dragged: w(1, 10))
+    #expect(b.activeStageID == mixed)
+    #expect(Set(b.activeStage!.windows) == [w(1, 10), w(2, 20)])
+}
+
+@Test func dropWithStaleDraggedWindowUsesTheStage() {
+    var b = threeWindowsThenOther()            // 20 on stage, pile [12, 11, 10]
+    b.combineIntoActive(stageID: b.stripStages[0].id, dragged: w(9, 90))
+    #expect(Set(b.activeStage!.windows) == [w(2, 20), w(1, 12)])
+    let before = b
+    b.combineIntoActive(stageID: UUID(), dragged: w(1, 11))
     #expect(b == before)
 }

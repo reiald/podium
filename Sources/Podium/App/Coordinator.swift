@@ -267,19 +267,12 @@ final class Coordinator {
 
     /// A strip thumbnail dragged onto the stage: its windows join the active stage. On the
     /// desktop there is nothing to join; the stage just comes on stage, as with a click.
-    /// One at a Time, exactly the `dragged` window comes in, even if its pile reordered
-    /// mid-drag; nothing happens if it left the board.
-    func combineIntoActive(stageID: UUID, dragged: WindowRef? = nil) {
+    /// One at a Time, a pile gives exactly the `dragged` window, even if it reordered
+    /// mid-drag (`StageBoard.combineIntoActive(stageID:dragged:)`).
+    func combineIntoActive(stageID: UUID, dragged: WindowRef?) {
         guard isRunning, !applying else { return }
         let old = board
-        if board.grouping == .oneAtATime, let w = dragged {
-            guard board.stages.contains(where: { $0.windows.contains(w) }) else { return }
-            board.addToActiveStage(w)
-        } else if board.activeStageID == nil {
-            return select(stageID: stageID)
-        } else {
-            board.combineIntoActive(stageID: stageID)
-        }
+        board.combineIntoActive(stageID: stageID, dragged: dragged)
         apply(from: old)
         if old.activeStageID == nil { activateFrontApp() }
     }

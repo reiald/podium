@@ -11,8 +11,8 @@ import PodiumCore
 /// click (or shift-click) until the pointer moves past `StripDrag`'s threshold; then it is a
 /// drag, reported as it goes, which drops on the stage if released outside the band.
 ///
-/// An item's app icon (`iconTarget`) sits above its card and takes the press first: released,
-/// it is an icon click; it never drags.
+/// An item's app icon (`iconTarget`) sits above its card and takes the press first: released
+/// on that icon (or within the drag threshold of the press), it is an icon click; it never drags.
 @MainActor
 final class StripPanel: NSPanel {
     var onClick: (UUID) -> Void = { _ in }
@@ -80,7 +80,7 @@ final class StripPanel: NSPanel {
 private final class MouseCatcher: FlippedView {
     weak var panel: StripPanel?
     private var pressed: (id: UUID, shift: Bool)?
-    private var pressedIcon: UUID?
+    private var pressedIcon: (id: UUID, at: CGPoint)?
     private var drag = StripDrag()
     private var escapeMonitors: [Any] = []
     private static let escapeKeyCode: UInt16 = 53
@@ -111,7 +111,7 @@ private final class MouseCatcher: FlippedView {
         pressedIcon = nil
         guard let panel, let p = globalPoint(event) else { return }
         if let icon = panel.iconTarget(p) {
-            pressedIcon = icon
+            pressedIcon = (icon, p)
             return
         }
         guard let id = panel.target(at: p) else { return }
@@ -136,7 +136,9 @@ private final class MouseCatcher: FlippedView {
         defer { pressed = nil }
         if let icon = pressedIcon {
             pressedIcon = nil
-            panel?.onIconClick(icon)
+            guard let panel, let p = globalPoint(event) else { return }
+            let still = hypot(p.x - icon.at.x, p.y - icon.at.y) <= StripDrag.dragThreshold
+            if still || panel.iconTarget(p) == icon.id { panel.onIconClick(icon.id) }
             return
         }
         guard let panel, let pressed, let p = globalPoint(event) else { return }

@@ -266,6 +266,20 @@ public struct StageBoard: Equatable, Sendable {
         mergePiles()
     }
 
+    /// A strip item dropped on the stage; `dragged` is the window whose card was dragged.
+    /// One at a Time, a single-app pile that still holds `dragged` gives exactly that window
+    /// (`addToActiveStage`). Otherwise the whole stage joins the active one, or, on the
+    /// desktop, comes on stage as with a click (`select`).
+    public mutating func combineIntoActive(stageID: UUID, dragged: WindowRef?) {
+        if let w = dragged, let i = index(of: stageID), isAppStripStage(at: i), stages[i].windows.contains(w) {
+            addToActiveStage(w)
+        } else if activeStageID == nil {
+            select(stageID: stageID)
+        } else {
+            combineIntoActive(stageID: stageID)
+        }
+    }
+
     /// Drag-out: moves `w` into its own new stage and activates it.
     public mutating func moveToOwnStage(_ w: WindowRef) {
         guard let from = stageIndex(of: w), stages[from].windows.count > 1 else { return }

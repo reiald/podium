@@ -227,13 +227,16 @@ final class StripPresenter {
     // MARK: - Thumbnail drag
 
     /// The card springs back or, dropped, enters from where it is as the stage combines.
+    /// The item must still be in the strip (the app view may have closed mid-press); a
+    /// flick drop never reported a drag, so its window comes from the item.
     private func dragEnded(_ id: UUID, dropped: Bool) {
-        let w = draggedWindow
+        let dragged = draggedWindow
         isDraggingThumbnail = false
         draggedWindow = nil
         releasedSince = nil
         runner.endDrag(dropped: dropped)
-        guard dropped else { return }
+        guard dropped, let stage = runner.stripStages().first(where: { $0.id == id }) else { return }
+        let w = dragged ?? stage.windows.first
         if runner.appView != nil {
             if let w { onAddWindow(w) }
         } else {
@@ -243,7 +246,8 @@ final class StripPresenter {
 
     /// Mission Control or a screen lock can eat the mouse-up, leaving the drag open (card
     /// frozen, auto-hide off). A release the panel hasn't heard about shortly after is called
-    /// off; the grace keeps a poll that runs just before the queued mouse-up from cancelling.
+    /// off; the grace keeps a poll that runs just before the queued mouse-up from cancelling,
+    /// and a mouse-up still queued (the main thread was blocked) is left to drop.
     private func checkLostMouseUp() {
         guard isDraggingThumbnail, NSEvent.pressedMouseButtons & 1 == 0 else {
             releasedSince = nil
@@ -252,7 +256,10 @@ final class StripPresenter {
         let now = ProcessInfo.processInfo.systemUptime
         let since = releasedSince ?? now
         releasedSince = since
-        if now - since >= Self.lostMouseUpDelay { panel.cancelDrag() }
+        guard now - since >= Self.lostMouseUpDelay,
+              NSApp.nextEvent(matching: .leftMouseUp, until: .distantPast, inMode: .default, dequeue: false) == nil
+        else { return }
+        panel.cancelDrag()
     }
 
     // MARK: - Drag-out
@@ -284,6 +291,8 @@ final class StripPresenter {
 
     /// In the app view an item is one window: a click shows exactly it, a shift-click adds it.
     private func clicked(_ id: UUID, shift: Bool) {
+        // An item the strip no longer lists (the app view closed mid-press) does nothing.
+        guard runner.stripStages().contains(where: { $0.id == id }) else { return }
         guard runner.appView != nil else { return shift ? onShiftClick(id) : onSelect(id) }
         guard let w = runner.stripStages().first(where: { $0.id == id })?.windows.first else { return }
         if shift {
@@ -307,13 +316,15 @@ final class StripPresenter {
         boardChanged()
     }
 
-    /// Closes the app view once the app has no off-stage window left or more of its
-    /// windows came on stage.
+    /// Closes the app view once app icons are turned off, the app has no off-stage window
+    /// left, or more of its windows came on stage.
     private func checkAppView() {
         guard let pid = runner.appView?.pid else { return }
         let b = board()
         let onStage = appWindowsOnStage(pid, b)
-        if appWindowItems(board: b, pid: pid).isEmpty {
+        if !runner.showAppIcons {
+            closeAppView(reason: "app icons turned off")
+        } else if appWindowItems(board: b, pid: pid).isEmpty {
             closeAppView(reason: "no off-stage windows")
         } else if !onStage.isSubset(of: appViewOnStage) {
             closeAppView(reason: "app came on stage")

@@ -44,3 +44,18 @@ private func threeWindowsThenOther() -> StageBoard {
     #expect(items.allSatisfy { $0.id.uuid.6 >> 4 == 8 })
     #expect(b.stages.allSatisfy { $0.id.uuid.6 >> 4 == 4 })
 }
+
+@Test func appWindowItemsAllAtOnceSpanMixedStages() {
+    var b = StageBoard(displayID: 1)
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.addToActiveStage(w(1, 10))               // [10, 20] mixed
+    b.windowOpened(w(4, 40))                   // [10, 20] to the strip
+    b.windowFocused(w(1, 10))
+    b.windowOpened(w(1, 11))                   // joins [10, 20]
+    b.moveToOwnStage(w(1, 11))                 // [11] alone
+    b.windowFocused(w(4, 40))
+    #expect(appWindowItems(board: b, pid: 1).map(\.windows) == [[w(1, 11)], [w(1, 10)]])
+    b.windowFocused(w(2, 20))                  // the mixed stage comes on stage: 10 with it
+    #expect(appWindowItems(board: b, pid: 1).map(\.windows) == [[w(1, 11)]])
+}
