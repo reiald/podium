@@ -46,12 +46,13 @@ final class Coordinator {
     }
     /// A plain click on empty wallpaper sends the stage to the strip (`showDesktop`).
     var wallpaperClickShowsDesktop = true {
-        didSet { presenter?.wallpaperClickEnabled = wallpaperClickShowsDesktop }
+        didSet {
+            presenter?.wallpaperClickEnabled = wallpaperClickShowsDesktop
+            if !wallpaperClickShowsDesktop { wallpaperVerdicts.reset() }
+        }
     }
-    /// A wallpaper press's hit-test is running.
-    private var wallpaperVerdictPending = false
-    /// Finder's activation by that press, applied only if it was not a wallpaper click.
-    private var heldFinderActivation: pid_t?
+    /// Wallpaper presses waiting for their hit-test, and Finder's activation held meanwhile.
+    private var wallpaperVerdicts = WallpaperVerdicts()
     /// Windows the minimize fallback is bringing back from the Dock, until the given time:
     /// their own (de)minimize and focus noise must not move stages meanwhile.
     private var unminimizing: [WindowRef: Date] = [:]
@@ -127,6 +128,7 @@ final class Coordinator {
         presenter.onShowWindow = { [weak self] in self?.show(window: $0) }
         presenter.onAddWindow = { [weak self] in self?.addToActive(window: $0) }
         presenter.onWallpaperPressEnded = { [weak self] in self?.wallpaperPressEnded(at: $0) }
+        presenter.onWallpaperPressBegan = { WallpaperProbe.pressBegan(display: $0) }
         self.presenter = presenter
         presenter.setAutoHideEnabled(autoHideEnabled)
         presenter.wallpaperClickEnabled = wallpaperClickShowsDesktop
@@ -343,29 +345,30 @@ final class Coordinator {
 
     /// A press that may be a wallpaper click ended (`p` nil: it was not a plain click). The
     /// hit-test runs off the main thread (`WallpaperProbe`); only a click on the bare desktop
-    /// shows it. Otherwise a Finder activation held for the verdict goes through.
+    /// shows it, and only if it is still the latest press and the same stage is on screen
+    /// (`WallpaperVerdicts`). Otherwise a Finder activation held for the verdict goes through.
     private func wallpaperPressEnded(at p: CGPoint?) {
-        guard let p, isRunning, wallpaperClickShowsDesktop, board.activeStageID != nil else {
-            return releaseFinderActivation()
+        guard let p, isRunning, wallpaperClickShowsDesktop, let active = board.activeStageID else {
+            return applyWallpaperOutcome(wallpaperVerdicts.pressDiscarded())
         }
-        wallpaperVerdictPending = true
+        let press = wallpaperVerdicts.pressEnded(activeStageID: active)
         WallpaperProbe.check(p) { [weak self] isWallpaper in
             guard let self else { return }
-            self.wallpaperVerdictPending = false
-            if isWallpaper {
-                self.heldFinderActivation = nil
-                self.showDesktop()
-            } else {
-                self.releaseFinderActivation()
-            }
+            self.applyWallpaperOutcome(self.wallpaperVerdicts.verdict(
+                press, isWallpaper: isWallpaper, activeStageID: self.board.activeStageID, now: CACurrentMediaTime()))
         }
     }
 
-    /// Finder's activation by a desktop press, held while the press may be a wallpaper click.
-    private func releaseFinderActivation() {
-        guard let pid = heldFinderActivation else { return }
-        heldFinderActivation = nil
-        if isRunning, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { handle(.appActivated(pid)) }
+    private func applyWallpaperOutcome(_ outcome: WallpaperVerdicts.Outcome) {
+        switch outcome {
+        case .none:
+            break
+        case .showDesktop:
+            showDesktop()
+        case let .release(pid):
+            // Finder's activation by a desktop press that was no wallpaper click.
+            if isRunning, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { handle(.appActivated(pid)) }
+        }
     }
 
     /// Wallpaper click: the whole active stage flies to the front of the strip and the stage
@@ -704,8 +707,12 @@ final class Coordinator {
             }
             // A press on the desktop activates Finder; if it turns out to be a wallpaper
             // click, Finder's most recent stage must not come on stage first.
-            if presenter?.wallpaperPressPending == true || wallpaperVerdictPending, isDesktopFocused(pid) {
-                heldFinderActivation = pid
+            if wallpaperClickShowsDesktop,
+               presenter?.wallpaperPressPending == true || wallpaperVerdicts.isWaiting
+                   || wallpaperVerdicts.ignoresFinderActivation(at: CACurrentMediaTime()),
+               isDesktopFocused(pid) {
+                // Held for the verdict; after a "yes" one, the late echo of that click.
+                if !wallpaperVerdicts.ignoresFinderActivation(at: CACurrentMediaTime()) { wallpaperVerdicts.hold(pid) }
                 return
             }
             // Prefer the window the app actually focused; fall back to its most recent one.

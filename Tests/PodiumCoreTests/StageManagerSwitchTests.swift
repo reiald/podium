@@ -31,3 +31,21 @@ private final class FakePrefs: StageManagerPreferences, @unchecked Sendable {
         #expect(p.reads == ["GloballyEnabled", "GloballyEnabled"])
     }
 }
+
+private struct KeyedPrefs: StageManagerPreferences {
+    var values: [String: Bool]
+    func bool(forKey key: String) -> Bool? { values[key] }
+}
+
+@Suite struct ClickToShowDesktopTests {
+    @Test func readsMacOSsWallpaperClickSetting() {
+        #expect(StageManagerSwitch(prefs: KeyedPrefs(values: ["EnableStandardClickToShowDesktop": true]))
+            .revealsDesktopOnWallpaperClick)
+        #expect(!StageManagerSwitch(prefs: KeyedPrefs(values: ["EnableStandardClickToShowDesktop": false]))
+            .revealsDesktopOnWallpaperClick)
+    }
+
+    @Test func missingKeyReadsAsAlways() {
+        #expect(StageManagerSwitch(prefs: KeyedPrefs(values: [:])).revealsDesktopOnWallpaperClick)
+    }
+}

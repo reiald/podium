@@ -21,6 +21,13 @@ enum AppleStageManager {
 
     static var isEnabled: Bool { control.isEnabled }
 
+    /// Desktop & Dock's "Click wallpaper to reveal desktop" is "Always": macOS itself sweeps
+    /// windows aside on a wallpaper click. Read only; safe off the main thread.
+    static var revealsDesktopOnWallpaperClick: Bool { control.revealsDesktopOnWallpaperClick }
+
+    @discardableResult
+    static func openDesktopSettings() -> Bool { NSWorkspace.shared.open(settingsURL) }
+
     @discardableResult
     static func disable() -> Bool { NSWorkspace.shared.open(settingsURL) }
 

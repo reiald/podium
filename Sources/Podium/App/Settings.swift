@@ -23,6 +23,9 @@ final class Settings: ObservableObject {
     @Published var clickWallpaperShowsDesktop: Bool {
         didSet { defaults.set(clickWallpaperShowsDesktop, forKey: "clickWallpaperShowsDesktop") }
     }
+    /// macOS's own "Click wallpaper to reveal desktop" is "Always", so Podium's does nothing.
+    /// Read from Apple's preferences (`refreshMacOSWallpaperClick`); not stored.
+    @Published private(set) var macOSRevealsDesktopOnClick = false
     /// The onboarding window was completed once.
     @Published var onboarded: Bool { didSet { defaults.set(onboarded, forKey: "onboarded") } }
     /// Podium turned Apple's Stage Manager off (so the menu offers to turn it back on).
@@ -67,6 +70,11 @@ final class Settings: ObservableObject {
             showAppIcons: defaults.object(forKey: "showAppIcons") as? Bool ?? d.showAppIcons,
             appIconSize: number("appIconSize", d.appIconSize)
         ).clamped()
+    }
+
+    func refreshMacOSWallpaperClick() {
+        let on = AppleStageManager.revealsDesktopOnWallpaperClick
+        if on != macOSRevealsDesktopOnClick { macOSRevealsDesktopOnClick = on }
     }
 
     /// The Settings window's Reset to Defaults: the customization and the strip options.

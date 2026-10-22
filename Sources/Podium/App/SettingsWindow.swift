@@ -70,6 +70,14 @@ struct SettingsView: View {
                     Text("Turn off the same option in other apps, such as Vorssaint.")
                 }
                 Toggle("Click wallpaper to show desktop", isOn: $settings.clickWallpaperShowsDesktop)
+                if settings.clickWallpaperShowsDesktop, settings.macOSRevealsDesktopOnClick {
+                    LabeledContent {
+                        Button("Open Desktop & Dock") { AppleStageManager.openDesktopSettings() }
+                    } label: {
+                        Text("macOS also reveals the desktop on a wallpaper click. In Desktop & Dock, set "
+                            + "'Click wallpaper to reveal desktop' to 'Only in Stage Manager' so Podium can do it.")
+                    }
+                }
             }
             HStack {
                 Spacer()
@@ -114,6 +122,7 @@ final class SettingsWindowController {
     private let settings: Settings
     private let loginItem = LoginItem()
     private var keyObserver: NSObjectProtocol?
+    private var activeObserver: NSObjectProtocol?
 
     init(settings: Settings) {
         self.settings = settings
@@ -122,6 +131,7 @@ final class SettingsWindowController {
     func show() {
         // The user may have changed it in System Settings since the last look.
         loginItem.refresh()
+        settings.refreshMacOSWallpaperClick()
         if window == nil {
             let w = SettingsNSWindow(contentViewController: NSHostingController(
                 rootView: SettingsView(settings: settings, loginItem: loginItem)))
@@ -130,10 +140,17 @@ final class SettingsWindowController {
             w.isReleasedWhenClosed = false
             w.center()
             window = w
-            // Back from System Settings > Login Items: read the state again.
+            // Back from System Settings (Login Items, Desktop & Dock): read the state again.
             keyObserver = NotificationCenter.default.addObserver(
                 forName: NSWindow.didBecomeKeyNotification, object: w, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.loginItem.refresh() }
+                MainActor.assumeIsolated {
+                    self?.loginItem.refresh()
+                    self?.settings.refreshMacOSWallpaperClick()
+                }
+            }
+            activeObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.settings.refreshMacOSWallpaperClick() }
             }
         }
         NSApp.activate()

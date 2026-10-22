@@ -38,8 +38,10 @@ final class StripPresenter {
     /// on empty wallpaper (the Coordinator checks); nil if it was not. Only while
     /// `wallpaperClickEnabled`.
     var onWallpaperPressEnded: (CGPoint?) -> Void = { _ in }
-    /// Such a press is waiting for its mouse-up.
-    var wallpaperPressPending: Bool { wallpaperPress.isPending }
+    /// Such a press began on the board's display (given, AX coordinates).
+    var onWallpaperPressBegan: (CGRect) -> Void = { _ in }
+    /// Such a press is waiting for its mouse-up and can still be a click.
+    var wallpaperPressPending: Bool { wallpaperPress.isPending(at: ProcessInfo.processInfo.systemUptime) }
     var wallpaperClickEnabled = false {
         didSet { if !wallpaperClickEnabled { wallpaperPress.reset() } }
     }
@@ -301,6 +303,7 @@ final class StripPresenter {
         if wallpaperClickEnabled, board().activeStage != nil {
             wallpaperPress.began(at: Self.location(of: event), time: event.timestamp,
                                  modifiers: Self.modifiers(event.modifierFlags))
+            if wallpaperPress.isPending { onWallpaperPressBegan(layout.screen) }
         } else {
             wallpaperPress.reset()
         }
