@@ -14,7 +14,9 @@ import struct PodiumCore.WindowRef
 final class StripPresenter {
     var onSelect: (UUID) -> Void = { _ in }
     var onShiftClick: (UUID) -> Void = { _ in }
-    var onCombine: (UUID) -> Void = { _ in }
+    /// The dropped stage, and the window whose card was dragged (nil if the press never
+    /// became a drag before the release).
+    var onCombine: (UUID, WindowRef?) -> Void = { _, _ in }
     /// The dragged window and its frame before the drag.
     var onDragOut: (WindowRef, CGRect) -> Void = { _, _ in }
 
@@ -36,8 +38,14 @@ final class StripPresenter {
     private var pollTick = 0
     private var stageFrames: [CGRect] = []
     private var monitors: [Any] = []
-    /// A strip thumbnail is being dragged: the strip must not hide under it.
+    /// The window whose strip card is being dragged (the stage's front window when the drag
+    /// began); while set, the strip must not hide under it.
+    private var draggedWindow: WindowRef?
     private var isDraggingThumbnail = false
+    /// When the poll first saw no button down mid-drag (see `checkLostMouseUp`).
+    private var releasedSince: TimeInterval?
+    /// A mouse-up normally arrives well within this; past it, it was lost.
+    private static let lostMouseUpDelay: TimeInterval = 0.25
     /// Active-stage window frames at the last mouse-down (drag-out detection).
     private var framesAtMouseDown: [WindowRef: CGRect] = [:]
 
@@ -54,8 +62,10 @@ final class StripPresenter {
         panel.onClick = { [weak self] in self?.onSelect($0) }
         panel.onShiftClick = { [weak self] in self?.onShiftClick($0) }
         panel.onDragBegan = { [weak self] id, p in
-            self?.isDraggingThumbnail = true
-            self?.runner.beginDrag(stageID: id, at: p)
+            guard let self else { return }
+            self.isDraggingThumbnail = true
+            self.draggedWindow = self.board().stages.first { $0.id == id }?.windows.first
+            self.runner.beginDrag(stageID: id, at: p)
         }
         panel.onDragMoved = { [weak self] in self?.runner.dragTo($0) }
         panel.onDragEnded = { [weak self] id, dropped in self?.dragEnded(id, dropped: dropped) }
@@ -85,6 +95,7 @@ final class StripPresenter {
     }
 
     func stop() {
+        panel.cancelDrag()
         pollTimer?.invalidate()
         pollTimer = nil
         monitors.forEach(NSEvent.removeMonitor)
@@ -147,6 +158,7 @@ final class StripPresenter {
 
     private func poll() {
         pollTick += 1
+        checkLostMouseUp()
         trackPointer()
         if pollTick % Self.frameRefreshEvery == 1 { refreshStageFrames() }
         let band = self.band
@@ -194,9 +206,26 @@ final class StripPresenter {
 
     /// The card springs back or, dropped, enters from where it is as the stage combines.
     private func dragEnded(_ id: UUID, dropped: Bool) {
+        let w = draggedWindow
         isDraggingThumbnail = false
+        draggedWindow = nil
+        releasedSince = nil
         runner.endDrag(dropped: dropped)
-        if dropped { onCombine(id) }
+        if dropped { onCombine(id, w) }
+    }
+
+    /// Mission Control or a screen lock can eat the mouse-up, leaving the drag open (card
+    /// frozen, auto-hide off). A release the panel hasn't heard about shortly after is called
+    /// off; the grace keeps a poll that runs just before the queued mouse-up from cancelling.
+    private func checkLostMouseUp() {
+        guard isDraggingThumbnail, NSEvent.pressedMouseButtons & 1 == 0 else {
+            releasedSince = nil
+            return
+        }
+        let now = ProcessInfo.processInfo.systemUptime
+        let since = releasedSince ?? now
+        releasedSince = since
+        if now - since >= Self.lostMouseUpDelay { panel.cancelDrag() }
     }
 
     // MARK: - Drag-out

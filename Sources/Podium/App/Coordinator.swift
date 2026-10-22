@@ -104,7 +104,7 @@ final class Coordinator {
                                        board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
         presenter.onSelect = { [weak self] in self?.select(stageID: $0) }
         presenter.onShiftClick = { [weak self] in self?.addFrontWindowToActive(stageID: $0) }
-        presenter.onCombine = { [weak self] in self?.combineIntoActive(stageID: $0) }
+        presenter.onCombine = { [weak self] in self?.combineIntoActive(stageID: $0, dragged: $1) }
         presenter.onDragOut = { [weak self] in self?.dragOut($0, restoreTo: $1) }
         self.presenter = presenter
         presenter.setAutoHideEnabled(autoHideEnabled)
@@ -245,6 +245,10 @@ final class Coordinator {
         // One at a Time, a pile's front window comes on stage alone.
         board.select(stageID: stageID)
         apply(from: old)
+        activateFrontApp()
+    }
+
+    private func activateFrontApp() {
         if let front = board.activeStage?.windows.first,
            let app = NSRunningApplication(processIdentifier: front.pid), !app.isActive {
             app.activate()
@@ -261,12 +265,21 @@ final class Coordinator {
 
     /// A strip thumbnail dragged onto the stage: its windows join the active stage. On the
     /// desktop there is nothing to join; the stage just comes on stage, as with a click.
-    func combineIntoActive(stageID: UUID) {
+    /// One at a Time, exactly the `dragged` window comes in, even if its pile reordered
+    /// mid-drag; nothing happens if it left the board.
+    func combineIntoActive(stageID: UUID, dragged: WindowRef? = nil) {
         guard isRunning, !applying else { return }
-        guard board.activeStageID != nil else { return select(stageID: stageID) }
         let old = board
-        board.combineIntoActive(stageID: stageID)
+        if board.grouping == .oneAtATime, let w = dragged {
+            guard board.stages.contains(where: { $0.windows.contains(w) }) else { return }
+            board.addToActiveStage(w)
+        } else if board.activeStageID == nil {
+            return select(stageID: stageID)
+        } else {
+            board.combineIntoActive(stageID: stageID)
+        }
         apply(from: old)
+        if old.activeStageID == nil { activateFrontApp() }
     }
 
     /// A stage window's title bar dragged into the strip band: the window gets its own stage

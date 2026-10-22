@@ -58,6 +58,9 @@ final class StripPanel: NSPanel {
 
     func show() { orderFrontRegardless() }
 
+    /// Calls off a drag in progress (a lost mouse-up, or teardown), as Esc would.
+    func cancelDrag() { catcher.cancelDrag() }
+
     fileprivate func target(at point: CGPoint) -> UUID? {
         targets.first { $0.frame.contains(point) }?.id
     }
@@ -139,10 +142,10 @@ private final class MouseCatcher: FlippedView {
     /// sees it there, a local one if Podium is active. Both exist only during a drag.
     private func watchEscape() {
         stopWatchingEscape()
+        // Swallowed (locally) only if it actually called off a drag.
         let escape: (NSEvent) -> Bool = { [weak self] event in
             guard event.keyCode == Self.escapeKeyCode else { return false }
-            MainActor.assumeIsolated { self?.escapePressed() }
-            return true
+            return MainActor.assumeIsolated { self?.cancelDrag() ?? false }
         }
         if let global = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: { _ = escape($0) }) {
             escapeMonitors.append(global)
@@ -157,9 +160,15 @@ private final class MouseCatcher: FlippedView {
         escapeMonitors = []
     }
 
-    private func escapePressed() {
-        guard let pressed, drag.escape() == .cancel else { return }
+    /// Calls off a drag; the rest of the press does nothing. False if there was none.
+    @discardableResult
+    func cancelDrag() -> Bool {
+        guard let pressed, drag.escape() == .cancel else {
+            stopWatchingEscape()
+            return false
+        }
         end(pressed.id, dropped: false)
+        return true
     }
 
     private func end(_ id: UUID, dropped: Bool) {

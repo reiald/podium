@@ -24,6 +24,13 @@ import Testing
         #expect(d.released(at: CGPoint(x: 82, y: 403), inBand: true) == .click)
     }
 
+    @Test func exactlyTheThresholdIsStillAClick() {
+        var d = pressed()
+        let edge = CGPoint(x: p.x + StripDrag.dragThreshold, y: p.y)
+        #expect(d.dragged(to: edge) == .none)
+        #expect(d.released(at: edge, inBand: true) == .click)
+    }
+
     @Test func pastThresholdIsADragForTheRestOfThePress() {
         var d = pressed()
         #expect(d.dragged(to: CGPoint(x: 90, y: 400)) == .began)
