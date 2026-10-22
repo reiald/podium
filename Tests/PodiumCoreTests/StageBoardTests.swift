@@ -749,3 +749,89 @@ private func mixedStripStage() -> (StageBoard, UUID) {
     b.combineIntoActive(stageID: UUID(), dragged: w(1, 11))
     #expect(b == before)
 }
+
+// MARK: - Hidden apps (Cmd-H)
+
+@Test func hidingAppAloneOnStageLeavesDesktopAndNoSlot() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))
+    b.appHidden(pid: 2)
+    #expect(b.activeStageID == nil)
+    #expect(b.isHidden(pid: 2))
+    #expect(b.visibleStripStages.map(\.windows) == [[w(1, 10)]])
+    #expect(appWindowItems(board: b, pid: 2).isEmpty)
+}
+
+@Test func hidingAppInSharedStageKeepsOtherAppsOnStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.addToActiveStage(w(1, 10))
+    #expect(Set(b.activeStage!.windows) == [w(1, 10), w(2, 20)])
+    b.appHidden(pid: 2)
+    #expect(b.activeStage?.windows == [w(1, 10)])
+    #expect(b.visibleStripStages.isEmpty)
+}
+
+@Test func hiddenAppIsNotActivatedUntilUnhidden() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.appHidden(pid: 2)
+    b.appActivated(pid: 2)
+    #expect(b.activeStageID == nil)
+    b.appUnhidden(pid: 2)
+    #expect(!b.isHidden(pid: 2))
+    #expect(b.visibleStripStages.count == 2)
+    b.appActivated(pid: 2)
+    #expect(b.activeStage?.windows == [w(2, 20)])
+    #expect(b.visibleStripStages.map(\.windows) == [[w(1, 10)]])
+}
+
+@Test func hidingOtherAppsTakesTheirStripStagesOut() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(3, 30))
+    // Hide Others from app 3.
+    b.appHidden(pid: 1)
+    b.appHidden(pid: 2)
+    #expect(b.activeStage?.windows == [w(3, 30)])
+    #expect(b.visibleStripStages.isEmpty)
+    // Show All: the strip stages come back, the stage stays as it is.
+    b.appUnhidden(pid: 1)
+    b.appUnhidden(pid: 2)
+    #expect(b.activeStage?.windows == [w(3, 30)])
+    #expect(b.visibleStripStages.count == 2)
+}
+
+@Test func windowOpenedByHiddenAppDoesNotJoinItsHiddenStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.appHidden(pid: 2)
+    b.windowOpened(w(2, 21))
+    #expect(b.activeStage?.windows == [w(2, 21)])
+}
+
+@Test func terminatingHiddenAppForgetsIt() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.appHidden(pid: 1)
+    b.appTerminated(pid: 1)
+    #expect(!b.isHidden(pid: 1))
+    #expect(b.stages.isEmpty)
+}
+
+@Test func oneAtATimeHidingAppSendsItsWindowToItsPile() {
+    var b = threeWindowsThenOther()
+    b.appActivated(pid: 1)
+    b.appHidden(pid: 1)
+    #expect(b.activeStageID == nil)
+    #expect(b.visibleStripStages.map(\.windows) == [[w(2, 20)]])
+    b.appUnhidden(pid: 1)
+    b.appActivated(pid: 1)
+    #expect(b.activeStage?.windows == [w(1, 12)])
+}

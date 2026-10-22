@@ -358,6 +358,11 @@ final class TransitionRunner {
 
     private func entered(_ w: WindowRef, generation: Int) {
         guard let t = tracks[w], t.phase == .entering, t.generation == generation else { return }
+        if isHidden(w.pid) {
+            // Hidden mid-flight: macOS owns it now; it stays parked.
+            drop(w)
+            return
+        }
         let ok = !mover.isParked(w) || unparkRetry.unpark(w)
         onBatchEnd([w])
         guard ok else {
@@ -468,7 +473,7 @@ final class TransitionRunner {
         var parked: [WindowRef] = []
         for (w, generation) in ready {
             guard let t = tracks[w], t.phase == .preparing, t.generation == generation else { continue }
-            if backend.isMinimized(w) {
+            if isOffScreenByMacOS(w) {
                 drop(w)
                 continue
             }
@@ -508,7 +513,7 @@ final class TransitionRunner {
     private func parkNow(_ windows: [WindowRef]) {
         var touched: [WindowRef] = []
         var parked: [WindowRef] = []
-        for w in windows where !mover.isParked(w) && !backend.isMinimized(w) {
+        for w in windows where !mover.isParked(w) && !isOffScreenByMacOS(w) {
             guard let frame = backend.frame(of: w), let screen = Screens.containing(frame) else { continue }
             touched.append(w)
             if mover.park(w, display: screen.frame, displayID: screen.id,
@@ -789,6 +794,15 @@ final class TransitionRunner {
         guard let t = tracks.removeValue(forKey: w) else { return }
         animator.cancel(t.card)
         overlay.remove(t.card)
+    }
+
+    /// Never parked: in the Dock, hidden with its app (Cmd-H), or full screen on its own Space.
+    private func isOffScreenByMacOS(_ w: WindowRef) -> Bool {
+        isHidden(w.pid) || backend.isMinimized(w) || backend.isFullScreen(w)
+    }
+
+    private func isHidden(_ pid: pid_t) -> Bool {
+        board().isHidden(pid: pid) || backend.isAppHidden(pid)
     }
 
     private func originalFrame(of w: WindowRef) -> CGRect? {

@@ -30,6 +30,9 @@ public struct Stage: Identifiable, Equatable, Sendable {
 ///   active stage becomes empty, `activeStageID = nil`. `w` stays marked minimized until it
 ///   is focused or `deminimize(w)` is called; `appActivated` and `windowOpened` never pick a
 ///   minimized window as the app's most recent one.
+/// - `appHidden(pid)` (Cmd-H): the app's windows on the active stage leave it as with
+///   `sendAppToStrip`; until `appUnhidden(pid)` none of the app's windows gets a strip slot,
+///   and `appActivated` and `windowOpened` never pick one as the app's most recent one.
 /// - Activating a stage makes it the most recently used.
 ///
 /// With `grouping == .oneAtATime` (`allAtOnce` is the default and follows only the rules above):
@@ -60,6 +63,8 @@ public struct StageBoard: Equatable, Sendable {
     private var clock = 0
     /// Windows sent to the Dock and not yet brought back.
     private var minimized: Set<WindowRef> = []
+    /// Apps hidden by macOS (Cmd-H, Hide Others) and not yet shown again.
+    private var hidden: Set<Int32> = []
 
     public init(displayID: UInt32) {
         self.displayID = displayID
@@ -68,6 +73,11 @@ public struct StageBoard: Equatable, Sendable {
     /// Whether `w` was sent to the Dock and not yet brought back.
     public func isMinimized(_ w: WindowRef) -> Bool {
         minimized.contains(w)
+    }
+
+    /// Whether the app is hidden (`appHidden`) and not yet shown again.
+    public func isHidden(pid: Int32) -> Bool {
+        hidden.contains(pid)
     }
 
     public var activeStage: Stage? {
@@ -80,10 +90,10 @@ public struct StageBoard: Equatable, Sendable {
     }
 
     /// The strip stages that get a slot: `stripStages` minus stages whose windows are all
-    /// in the Dock. Those have no card (the Dock took them off screen), so a slot for them
-    /// would be an invisible click target pushing real stages past the last row.
+    /// in the Dock or of hidden apps. Those have no card (macOS took them off screen), so a
+    /// slot for them would be an invisible click target pushing real stages past the last row.
     public var visibleStripStages: [Stage] {
-        stripStages.filter { !$0.windows.allSatisfy(minimized.contains) }
+        stripStages.filter { !$0.windows.allSatisfy { minimized.contains($0) || hidden.contains($0.pid) } }
     }
 
     // MARK: Events
@@ -152,8 +162,23 @@ public struct StageBoard: Equatable, Sendable {
     }
 
     public mutating func appTerminated(pid: Int32) {
+        hidden.remove(pid)
         remove { $0.pid == pid }
         mergePiles()
+    }
+
+    /// The app was hidden: its windows on the active stage leave it (`sendAppToStrip`); other
+    /// apps' windows stay, and an emptied stage area is the desktop. Its stages keep their
+    /// place in the strip but get no slot until `appUnhidden`.
+    public mutating func appHidden(pid: Int32) {
+        hidden.insert(pid)
+        sendAppToStrip(pid: pid)
+    }
+
+    /// The app was shown again: its stages get their slots back. Bringing its stage on stage
+    /// is the activation's job (`appActivated`).
+    public mutating func appUnhidden(pid: Int32) {
+        hidden.remove(pid)
     }
 
     /// Makes the stage active and most recently used. `nil` shows the desktop. One at a Time:
@@ -364,7 +389,7 @@ public struct StageBoard: Equatable, Sendable {
 
     private func mostRecentWindow(pid: Int32) -> WindowRef? {
         stages.flatMap { $0.windows }
-            .filter { $0.pid == pid && !minimized.contains($0) }
+            .filter { $0.pid == pid && !minimized.contains($0) && !hidden.contains(pid) }
             .max { (focusTick[$0] ?? 0) < (focusTick[$1] ?? 0) }
     }
 

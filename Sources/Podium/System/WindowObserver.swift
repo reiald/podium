@@ -11,6 +11,9 @@ enum WindowEvent {
     case deminimized(WindowRef)
     case appActivated(Int32)
     case appTerminated(Int32)
+    /// Cmd-H, Hide Others, Show All: macOS took the app's windows off screen or put them back.
+    case appHidden(Int32)
+    case appUnhidden(Int32)
 }
 
 /// Turns Accessibility and NSWorkspace notifications into `WindowEvent`s.
@@ -73,6 +76,14 @@ final class WindowObserver {
         on(NSWorkspace.didActivateApplicationNotification) { [weak self] app in
             guard let self, app.processIdentifier != getpid() else { return }
             self.onEvent(.appActivated(app.processIdentifier))
+        }
+        on(NSWorkspace.didHideApplicationNotification) { [weak self] app in
+            guard let self, Self.isObservable(app) else { return }
+            self.onEvent(.appHidden(app.processIdentifier))
+        }
+        on(NSWorkspace.didUnhideApplicationNotification) { [weak self] app in
+            guard let self, Self.isObservable(app) else { return }
+            self.onEvent(.appUnhidden(app.processIdentifier))
         }
     }
 

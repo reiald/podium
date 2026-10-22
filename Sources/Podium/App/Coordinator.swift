@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import os
 import PodiumCore
 // Carbon (via AppKit) also declares `WindowRef`; this scoped import makes it mean Podium's.
 import struct PodiumCore.WindowRef
@@ -61,6 +62,13 @@ final class Coordinator {
     /// How long launch waits for snapshots of every window before parking (strip cards).
     private static let launchSnapshotWait: TimeInterval = 1
     private var notificationTokens: [(NotificationCenter, NSObjectProtocol)] = []
+    private let logger = Logger(subsystem: "dev.podium.Podium", category: "stage")
+    /// Windows that went full screen (or into Split View), off the board: they come back as
+    /// new windows once they leave it (`checkFullScreen`).
+    private var fullScreen: Set<WindowRef> = []
+    /// After an unhide, how long the app's activation may take before its windows that are
+    /// not on stage are parked (`settleUnhidden`).
+    private static let unhideSettle: TimeInterval = 0.3
 
     /// Windows Podium moved, until `inFlightWindow` after the batch that moved them ended.
     /// Moving a window can make its app report focus changes that must not switch stages;
@@ -173,6 +181,7 @@ final class Coordinator {
         }
         observe(NSWorkspace.shared.notificationCenter, NSWorkspace.activeSpaceDidChangeNotification) { [weak self] in
             self?.recoverStrays()
+            self?.checkFullScreen()
         }
         // The tap's frontmost app must follow every activation, Podium's own included (the
         // window observer drops those).
@@ -400,6 +409,7 @@ final class Coordinator {
     private func appsInStrip() -> Set<pid_t> {
         let active = Set(board.activeStage?.windows ?? [])
         return Set(board.stages.flatMap(\.windows).filter { !active.contains($0) && !board.isMinimized($0) }.map(\.pid))
+            .filter { !board.isHidden(pid: $0) }
     }
 
     /// What a Dock click on a running app does: activates it and sends it a reopen event.
@@ -569,10 +579,16 @@ final class Coordinator {
 
     private func process(_ e: WindowEvent) {
         let old = board
-        var minimized: WindowRef?
+        // Windows macOS itself took off screen (Dock, hide): they leave the stage unparked.
+        var offScreen: [WindowRef] = []
         switch e {
         case let .opened(w):
-            guard isOnBoard(w) || shouldManage(w) else { return }
+            // A hidden app's windows join when it is shown again (`.appUnhidden`).
+            guard !isHidden(w.pid) else { return }
+            guard isOnBoard(w) || shouldManage(w) else {
+                if w.pid != getpid(), backend.isFullScreen(w) { fullScreen.insert(w) }
+                return
+            }
             board.windowOpened(w)
         case let .closed(w):
             // On screen: believed at once (apps that hide a window on close keep it listed,
@@ -589,6 +605,7 @@ final class Coordinator {
                 }
                 return
             case let .closed(forgetLedger):
+                fullScreen.remove(w)
                 closeFocus.closed(at: CACurrentMediaTime())
                 board.windowClosed(w)
                 runner?.forget(w)
@@ -600,7 +617,11 @@ final class Coordinator {
         case let .focused(w):
             // Parked windows count: Cmd-`, the Window menu, the Dock and Mission Control
             // focus them, and that must bring their stage forward. Minimized ones don't.
-            guard !isInFlight(w), !isUnminimizing(w), !backend.isMinimized(w) else { return }
+            guard !isInFlight(w), !isUnminimizing(w), !isHidden(w.pid), !backend.isMinimized(w) else { return }
+            if backend.isFullScreen(w) {
+                dropFullScreen(w)
+                break
+            }
             if closeFocus.ignores(w, at: CACurrentMediaTime(), board: board) { return keepStageAfterClose(from: w) }
             if !isOnBoard(w) {
                 // A window we never saw open (e.g. on another Space at launch).
@@ -618,14 +639,15 @@ final class Coordinator {
                 return
             }
             // The Dock took it off screen; never park it.
-            minimized = w
+            offScreen = [w]
             board.minimize(w)
         case let .deminimized(w):
             // The fallback un-minimizing it: it is about to go to the strip instead.
             guard !isUnminimizing(w) else { return }
             board.deminimize(w)
         case let .appActivated(pid):
-            guard pid != getpid() else { return }
+            // A hidden app being activated is shown again; `.appUnhidden` brings its stage.
+            guard pid != getpid(), !isHidden(pid) else { return }
             if closeFocus.ignores(appActivated: pid, at: CACurrentMediaTime(), board: board) {
                 return keepStageAfterClose(from: nil)
             }
@@ -634,18 +656,104 @@ final class Coordinator {
             // report the window that was just parked.
             if let focused = focusedWindow(of: pid), isOnBoard(focused), !isInFlight(focused),
                !backend.isMinimized(focused) {
-                board.windowFocused(focused)
+                if backend.isFullScreen(focused) {
+                    dropFullScreen(focused)
+                } else {
+                    board.windowFocused(focused)
+                }
             } else {
                 board.appActivated(pid: pid)
             }
         case let .appTerminated(pid):
             closeFocus.closed(at: CACurrentMediaTime())
+            fullScreen = fullScreen.filter { $0.pid != pid }
             board.appTerminated(pid: pid)
             let capture = self.capture
             Task { await capture.forgetApp(pid: pid) }
             for e in ledger.entries() where e.window.pid == pid { mover.forget(e.window) }
+        case let .appHidden(pid):
+            // Its windows on stage leave it as they are; parked ones stay where they are.
+            offScreen = board.activeStage?.windows.filter { $0.pid == pid } ?? []
+            logger.log("pid \(pid, privacy: .public) hidden; \(offScreen.count, privacy: .public) window(s) leave the stage")
+            board.appHidden(pid: pid)
+        case let .appUnhidden(pid):
+            board.appUnhidden(pid: pid)
+            // Windows it opened while hidden (or that were hidden at launch) join the board,
+            // without taking the stage from whatever is on it.
+            let activeBefore = board.activeStageID
+            let unseen = AX.isHung(pid) ? [] : backend.manageableWindows(of: pid).filter { !isOnBoard($0) && !mover.isParked($0) }
+            for w in unseen { board.windowOpened(w) }
+            if !unseen.isEmpty { board.activate(stageID: activeBefore) }
+            // Unhide usually comes with the app's activation, before or after this: either
+            // way its stage comes on stage. What is still off stage then gets parked.
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { board.appActivated(pid: pid) }
+            logger.log("pid \(pid, privacy: .public) shown again")
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.unhideSettle) { [weak self] in
+                self?.settleUnhidden(pid: pid)
+            }
         }
-        apply(from: old, alreadyOffScreen: minimized.map { [$0] } ?? [])
+        apply(from: old, alreadyOffScreen: Set(offScreen))
+    }
+
+    /// macOS hid the app (Cmd-H, Hide Others): its windows are off screen and must not be
+    /// moved. The live flag covers the moment before `.appHidden` arrives (the next app's
+    /// activation can come first).
+    private func isHidden(_ pid: pid_t) -> Bool {
+        board.isHidden(pid: pid) || backend.isAppHidden(pid)
+    }
+
+    /// After an unhide settles: macOS put every window of the app back where it was, so the
+    /// ones that were on stage when it was hidden, and are not now, are still on screen:
+    /// they are parked (no card flight; their strip cards fade in from cached snapshots).
+    /// Parked ones on the stage now are unparked, in case the move to the stage happened
+    /// while macOS still reported the app hidden.
+    private func settleUnhidden(pid: pid_t) {
+        guard isRunning, !applying, !isHidden(pid) else { return }
+        let active = Set(board.activeStage?.windows ?? [])
+        let windows = board.stages.flatMap(\.windows).filter { $0.pid == pid }
+        let strays = windows.filter { !active.contains($0) && !mover.isParked($0) }
+        let missing = windows.filter { active.contains($0) && mover.isParked($0) && unparkRetry.mayTry($0) }
+        guard !strays.isEmpty || !missing.isEmpty else { return }
+        logger.log("pid \(pid, privacy: .public) shown again: parking \(strays.count, privacy: .public), unparking \(missing.count, privacy: .public)")
+        runner?.discardCards(for: missing)
+        show(missing)
+        hide(strays)
+        if let front = board.activeStage?.windows.first, !mover.isParked(front) { backend.raise(front) }
+        endBatch()
+        runner?.update(layout: layout)
+        presenter?.boardChanged()
+        publishMinimizeState()
+    }
+
+    /// `w` went full screen (or into Split View), onto a Space of its own: Podium stops
+    /// managing it until it leaves (`checkFullScreen`). Not a close: a parked one keeps its
+    /// ledger entry, which `recoverStrays` puts back.
+    private func dropFullScreen(_ w: WindowRef) {
+        fullScreen.insert(w)
+        guard isOnBoard(w) else { return }
+        logger.log("window \(w.windowID, privacy: .public) (pid \(w.pid, privacy: .public)) went full screen; no longer on the board")
+        board.windowClosed(w)
+        runner?.forget(w)
+    }
+
+    /// Full screen and Split View have no AX notification, but entering and leaving them
+    /// switches Spaces. Reads AXFullScreen of the frontmost app's board windows (that app
+    /// went full screen) and of the windows dropped for it: those that left it come back
+    /// as newly opened windows.
+    private func checkFullScreen() {
+        guard isRunning, !applying else { return }
+        let old = board
+        if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier, front != getpid() {
+            for w in board.stages.flatMap(\.windows) where w.pid == front && backend.isFullScreen(w) {
+                dropFullScreen(w)
+            }
+        }
+        for w in fullScreen where !backend.isFullScreen(w) && backend.canManage(w) {
+            fullScreen.remove(w)
+            logger.log("window \(w.windowID, privacy: .public) (pid \(w.pid, privacy: .public)) left full screen")
+            if !isHidden(w.pid) { board.windowOpened(w) }
+        }
+        apply(from: old)
     }
 
     private static let closeRecheckDelay: TimeInterval = 0.5
@@ -724,13 +832,14 @@ final class Coordinator {
     private func apply(from old: StageBoard, alreadyOffScreen: Set<WindowRef> = []) {
         guard board != old else { return }
         var plan = transitionPlan(from: old, to: board)
-        plan.leaving.removeAll { alreadyOffScreen.contains($0) }
+        plan.leaving.removeAll { alreadyOffScreen.contains($0) || isHidden($0.pid) }
+        plan.entering.removeAll { isHidden($0.pid) }
         // A parked window can join the active stage without having been in the strip (it
         // re-joined the board, e.g. a kept ledger entry focused via Cmd-`): it enters too.
         // So does one whose unpark failed earlier, but only once its backoff allows.
         let entering = Set(plan.entering)
         plan.entering += (board.activeStage?.windows ?? []).filter {
-            !entering.contains($0) && mover.isParked($0) && unparkRetry.mayTry($0)
+            !entering.contains($0) && mover.isParked($0) && unparkRetry.mayTry($0) && !isHidden($0.pid)
         }
         for w in alreadyOffScreen { runner?.forget(w) }
         // In flight from the start: the moves happen a few frames (or a whole flight) later,
@@ -754,7 +863,7 @@ final class Coordinator {
 
     /// Unparks; a window that fails stays in the ledger (restoreAll / recovery still own it).
     private func show(_ windows: [WindowRef]) {
-        for w in windows {
+        for w in windows where !isHidden(w.pid) {
             batchTouched.insert(w)
             if !unparkRetry.unpark(w) { NSLog("Podium: could not unpark %u (pid %d)", w.windowID, w.pid) }
         }
@@ -765,7 +874,8 @@ final class Coordinator {
     private func hide(_ windows: [WindowRef]) {
         var parked: [WindowRef] = []
         defer { shrinkSnapshots(of: parked) }
-        for w in windows where !mover.isParked(w) && !backend.isMinimized(w) {
+        for w in windows where !mover.isParked(w) && !isHidden(w.pid) && !backend.isMinimized(w)
+            && !backend.isFullScreen(w) {
             guard let frame = backend.frame(of: w) else {
                 NSLog("Podium: cannot read frame of %u (pid %d); not parking", w.windowID, w.pid)
                 continue

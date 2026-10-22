@@ -74,6 +74,17 @@ final class AXWindowBackend: WindowBackend {
         element(for: w).map { AX.bool(kAXMinimizedAttribute, of: $0) } ?? false
     }
 
+    /// Whether macOS hid the app (Cmd-H, Hide Others). No AX call.
+    func isAppHidden(_ pid: Int32) -> Bool {
+        NSRunningApplication(processIdentifier: pid)?.isHidden == true
+    }
+
+    /// Whether `w` is full screen (or in Split View), on a Space of its own. False when it
+    /// can't be read.
+    func isFullScreen(_ w: WindowRef) -> Bool {
+        element(for: w).map { AX.bool(Self.fullScreenAttribute, of: $0) } ?? false
+    }
+
     /// AXMinimized, or nil when it can't be read (window gone or app not answering).
     func minimizedState(of w: WindowRef) -> Bool? {
         element(for: w).flatMap { AX.optionalBool(kAXMinimizedAttribute, of: $0) }
@@ -96,9 +107,11 @@ final class AXWindowBackend: WindowBackend {
     static func manageable(_ e: AXUIElement) -> Bool {
         isManageable(role: AX.string(kAXRoleAttribute, of: e),
                      subrole: AX.string(kAXSubroleAttribute, of: e),
-                     isFullscreen: AX.bool("AXFullScreen", of: e),
+                     isFullscreen: AX.bool(fullScreenAttribute, of: e),
                      isMinimized: AX.bool(kAXMinimizedAttribute, of: e))
     }
+
+    private static let fullScreenAttribute = "AXFullScreen"
 
     private static func isAlive(_ pid: Int32) -> Bool {
         kill(pid, 0) == 0 || errno == EPERM

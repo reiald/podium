@@ -2,11 +2,13 @@ import Foundation
 
 /// The strip's app view (an app icon was clicked): one virtual single-window stage per
 /// window of `pid` that is off stage (not on the active stage, not in the Dock), most
-/// recently focused first. Windows never focused keep their strip order.
+/// recently focused first; none while the app is hidden. Windows never focused keep their
+/// strip order.
 ///
 /// Each item's id comes from `appWindowItemID`, so it is the same across relayouts and
 /// never equals a real stage's id.
 public func appWindowItems(board: StageBoard, pid: Int32) -> [Stage] {
+    guard !board.isHidden(pid: pid) else { return [] }
     let windows = board.stripStages.flatMap(\.windows).filter { $0.pid == pid && !board.isMinimized($0) }
     return windows.enumerated()
         .sorted { a, b in
