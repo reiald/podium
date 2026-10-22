@@ -567,3 +567,73 @@ private func threeWindowsThenOther() -> StageBoard {
     #expect(b.activeStage?.windows == [w(1, 13)])
     #expect(b.stripStages.map(\.windows) == [[w(2, 20)], [w(1, 12), w(1, 11), w(1, 10)]])
 }
+
+// MARK: - Dock-icon click: sendAppToStrip
+
+@Test func sendAppToStripMovesWholeSingleAppStageToFrontOfStrip() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))                   // stage: 21, 20; strip: [10]
+    let stage = b.activeStageID!
+    b.sendAppToStrip(pid: 2)
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.first?.id == stage)
+    #expect(Set(b.stripStages.first!.windows) == [w(2, 20), w(2, 21)])
+    // Clicking the icon again: the app activates and its stage comes back.
+    b.appActivated(pid: 2)
+    #expect(b.activeStageID == stage)
+}
+
+@Test func sendAppToStripInMixedStageMovesOnlyThatApp() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))
+    b.addToActiveStage(w(1, 10))               // stage: 10, 21, 20
+    let stage = b.activeStageID!
+    b.sendAppToStrip(pid: 2)
+    #expect(b.activeStageID == stage)
+    #expect(b.activeStage?.windows == [w(1, 10)])
+    #expect(b.stripStages.count == 1)
+    #expect(Set(b.stripStages[0].windows) == [w(2, 20), w(2, 21)])
+}
+
+@Test func sendAppToStripPutsNewStageAheadOfOlderStripStages() {
+    var b = board()
+    b.windowOpened(w(3, 30))
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.addToActiveStage(w(1, 10))               // stage: 10, 20; strip: [30]
+    b.sendAppToStrip(pid: 2)
+    #expect(b.stripStages.map(\.windows) == [[w(2, 20)], [w(3, 30)]])
+}
+
+@Test func sendAppToStripIsNoOpWithoutWindowOnStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    let before = b
+    b.sendAppToStrip(pid: 1)                   // app 1 is in the strip only
+    #expect(b == before)
+    b.sendAppToStrip(pid: 9)
+    #expect(b == before)
+    var empty = board()
+    empty.sendAppToStrip(pid: 1)
+    #expect(empty == board())
+}
+
+@Test func sendAppToStripOneAtATimeJoinsPile() {
+    var b = threeWindowsThenOther()            // 20 on stage, pile [12, 11, 10]
+    b.appActivated(pid: 1)                     // 12 on stage, pile [11, 10]
+    b.sendAppToStrip(pid: 1)
+    #expect(b.activeStageID == nil)
+    #expect(b.stripStages.first?.windows == [w(1, 12), w(1, 11), w(1, 10)])
+    #expect(b.stripStages.count == 2)
+    // Mixed stage: only that app's window leaves.
+    b.windowFocused(w(2, 20))
+    b.addToActiveStage(w(1, 12))
+    b.sendAppToStrip(pid: 1)
+    #expect(b.activeStage?.windows == [w(2, 20)])
+    #expect(b.stripStages.map(\.windows) == [[w(1, 12), w(1, 11), w(1, 10)]])
+}

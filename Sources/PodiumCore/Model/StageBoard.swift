@@ -272,6 +272,33 @@ public struct StageBoard: Equatable, Sendable {
         mergePiles()
     }
 
+    /// Dock-icon click to minimize: the app's windows on the active stage leave it together.
+    /// All at Once they become one strip stage at the front of the strip (the whole stage
+    /// itself when it held only that app); One at a Time they join the front of the app's
+    /// pile. Other apps' windows stay on stage; if none remain, `activeStageID = nil`.
+    /// No-op if the app has no window on the active stage.
+    public mutating func sendAppToStrip(pid: Int32) {
+        guard let a = activeIndex else { return }
+        let leaving = stages[a].windows.filter { $0.pid == pid }
+        guard !leaving.isEmpty else { return }
+        if grouping == .oneAtATime {
+            stages[a].windows.removeAll { $0.pid == pid }
+            if stages[a].windows.isEmpty { deleteStage(at: a) }
+            pushToPile(leaving, atBack: false)
+        } else if leaving.count == stages[a].windows.count {
+            // Already at the front of the most-recently-used order: it just stops being active.
+            setActive(nil)
+        } else {
+            stages[a].windows.removeAll { $0.pid == pid }
+            let stage = Stage(id: UUID(), windows: leaving)
+            stages.append(stage)
+            // Front of the strip, behind the stage that stays active.
+            mru.insert(stage.id, at: 0)
+            setActive(stages[a].id)
+        }
+        mergePiles()
+    }
+
     public mutating func minimize(_ w: WindowRef) {
         guard let from = stageIndex(of: w) else { return }
         minimized.insert(w)

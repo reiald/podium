@@ -6,7 +6,9 @@ import PodiumCore
 import struct PodiumCore.WindowRef
 
 /// Catches the yellow button and Cmd-M before the app sees them, so a managed window can
-/// fly into the strip instead of the Dock (`onIntercept`, called on the main thread).
+/// fly into the strip instead of the Dock (`onIntercept`, called on the main thread). With
+/// the Dock-click setting on, a plain click on the frontmost app's Dock icon sends that app's
+/// on-stage windows to the strip (`onDockClick`).
 ///
 /// An event tap sits in front of all system input, so it is deliberately timid: anything
 /// it is not sure about (a slow or failed AX hit-test, a modifier, an unmanaged window, a
@@ -22,10 +24,19 @@ final class MinimizeInterceptor: @unchecked Sendable {
         var behavior: MinimizeBehavior = .dock
         /// Windows whose minimize may go to the strip (on screen in the active stage).
         var managed: Set<WindowRef> = []
+        /// "Click an app's Dock icon to minimize it to the strip".
+        var dockClickEnabled = false
+        /// The frontmost app and its bundle.
+        var frontmostPid: pid_t?
+        var frontmostURL: URL?
     }
 
     private let onIntercept: @MainActor (WindowRef) -> Void
+    private let onDockClick: @MainActor (pid_t) -> Void
     private let state = OSAllocatedUnfairLock(initialState: State())
+    /// Where a click may land on a Dock icon (`dockClickGate`); refreshed on main by
+    /// `refreshDockFrame`, read by the tap. Nil: unknown, so no Dock click is intercepted.
+    private let dockGate = OSAllocatedUnfairLock<CGRect?>(initialState: nil)
     /// When the last Option-click or Command-Option key press happened (tap thread writes).
     private let lastMinimizeAllGesture = OSAllocatedUnfairLock(initialState: -CFTimeInterval.infinity)
 
@@ -33,6 +44,8 @@ final class MinimizeInterceptor: @unchecked Sendable {
     private var thread: Thread?
     private var tapRunLoop: CFRunLoop?
     private var finished: DispatchSemaphore?
+    private var dockFrameTimer: Timer?
+    private var dockFrameReading = false
 
     /// Written by the tap thread before it signals ready; read by main after the wait.
     private var startedRunLoop: CFRunLoop?
@@ -49,17 +62,64 @@ final class MinimizeInterceptor: @unchecked Sendable {
 
     /// Upper bound on an AX call made inside the callback.
     static let hitTestTimeout: Float = 0.05
+    /// How often the Dock's frame is re-read while the Dock-click setting is on (it moves when
+    /// apps launch or quit, or the Dock is resized).
+    static let dockFrameRefresh: TimeInterval = 2
     /// A callback this fast marks an unhealthy tap healthy again.
     static let healthyCallbackTime: CFTimeInterval = 0.005
 
-    init(onIntercept: @escaping @MainActor (WindowRef) -> Void) {
+    init(onIntercept: @escaping @MainActor (WindowRef) -> Void, onDockClick: @escaping @MainActor (pid_t) -> Void) {
         self.onIntercept = onIntercept
+        self.onDockClick = onDockClick
     }
 
     /// Publishes what the tap may intercept. Call on every board or setting change.
+    @MainActor
     func update(_ new: State) {
-        state.withLock { $0 = new }
+        let wasDockClick = state.withLock { s -> Bool in
+            defer { s = new }
+            return s.dockClickEnabled
+        }
+        if new.dockClickEnabled, !wasDockClick { refreshDockFrame() }
     }
+
+    /// Re-reads where the Dock's icons are (off the main thread; one AX read of the Dock),
+    /// only while the Dock-click setting is on. Call on screen changes too.
+    @MainActor
+    func refreshDockFrame() {
+        guard tapRunLoop != nil, state.withLock({ $0.dockClickEnabled }), !dockFrameReading,
+              let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
+        else { return }
+        dockFrameReading = true
+        let pid = dock.processIdentifier
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let frame = Self.dockListFrame(pid: pid)
+            DispatchQueue.main.async { [self] in
+                MainActor.assumeIsolated {
+                    dockFrameReading = false
+                    let gate = frame.flatMap { dockClickGate(listFrame: $0, screens: Screens.all.map(\.frame)) }
+                    dockGate.withLock { $0 = gate }
+                }
+            }
+        }
+    }
+
+    /// The frame of the Dock's icon list (`AXList`), in AX coordinates.
+    private static func dockListFrame(pid: pid_t) -> CGRect? {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, dockReadTimeout)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, kAXChildrenAttribute as CFString, &value) == .success,
+              let children = value as? [AXUIElement] else { return nil }
+        for child in children {
+            AXUIElementSetMessagingTimeout(child, dockReadTimeout)
+            if AX.string(kAXRoleAttribute, of: child) == kAXListRole, let frame = AX.frame(of: child) { return frame }
+        }
+        return nil
+    }
+
+    /// Upper bound on each AX call reading the Dock's frame (off the main thread).
+    private static let dockReadTimeout: Float = 0.25
 
     /// Whether an Option-click or Option-Cmd-M happened in the last `seconds`. Such a
     /// gesture may be macOS's "minimize all", whose minimizes must stay in the Dock. Recorded
@@ -94,11 +154,17 @@ final class MinimizeInterceptor: @unchecked Sendable {
         self.thread = thread
         self.finished = finished
         tapRunLoop = runLoop
+        dockFrameTimer = Timer.scheduledTimer(withTimeInterval: Self.dockFrameRefresh, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.refreshDockFrame() }
+        }
+        refreshDockFrame()
     }
 
     /// Stops the tap; all input reaches apps directly again.
     @MainActor
     func stop() {
+        dockFrameTimer?.invalidate()
+        dockFrameTimer = nil
         guard let runLoop = tapRunLoop else { return }
         CFRunLoopPerformBlock(runLoop, CFRunLoopMode.defaultMode.rawValue) { CFRunLoopStop(CFRunLoopGetCurrent()) }
         CFRunLoopWakeUp(runLoop)
@@ -161,6 +227,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
     private enum Outcome {
         case pass, swallow
         case intercept(WindowRef)
+        case dockClick(pid_t)
     }
 
     /// True to swallow the event.
@@ -197,6 +264,10 @@ final class MinimizeInterceptor: @unchecked Sendable {
                 let onIntercept = self.onIntercept
                 DispatchQueue.main.async { MainActor.assumeIsolated { onIntercept(w) } }
                 return true
+            case let .dockClick(pid):
+                let onDockClick = self.onDockClick
+                DispatchQueue.main.async { MainActor.assumeIsolated { onDockClick(pid) } }
+                return true
             }
         default:
             return false
@@ -209,6 +280,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
         swallowedMouseDown = false
         let modifiers = Self.modifiers(event.flags)
         if modifiers == .option { lastMinimizeAllGesture.withLock { $0 = CACurrentMediaTime() } }
+        if let outcome = dockClick(event, s, modifiers: modifiers, tapHealthy: tapHealthy) { return outcome }
         // Skip the hit-test when nothing could be intercepted anyway.
         guard s.enabled, !s.managed.isEmpty, let systemWide,
               decideMinimize(.mouseDown(subrole: "AXMinimizeButton", modifiers: modifiers), behavior: s.behavior,
@@ -228,6 +300,30 @@ final class MinimizeInterceptor: @unchecked Sendable {
         guard decision == .intercept else { return .pass }
         swallowedMouseDown = true
         return .intercept(ref)
+    }
+
+    /// A click inside the Dock's icon area, when the Dock-click setting could apply: intercepts
+    /// a plain click on the frontmost app's own icon, passes anything else. Nil (not a Dock
+    /// click) everywhere else, without any AX work.
+    private func dockClick(_ event: CGEvent, _ s: State, modifiers: ModifierSet, tapHealthy: Bool) -> Outcome? {
+        let p = event.location
+        guard s.dockClickEnabled, modifiers.isEmpty, tapHealthy, let pid = s.frontmostPid,
+              let front = s.frontmostURL, let systemWide, s.managed.contains(where: { $0.pid == pid }),
+              dockGate.withLock({ $0?.contains(p) }) == true else { return nil }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success,
+              let item = hit else { return .pass }
+        AXUIElementSetMessagingTimeout(item, Self.hitTestTimeout)
+        let role = AX.string(kAXRoleAttribute, of: item)
+        // Only a Dock item is worth the remaining reads; a window under the gate falls through.
+        guard role == "AXDockItem" else { return nil }
+        let click = DockClick(modifiers: modifiers, role: role, subrole: AX.string(kAXSubroleAttribute, of: item),
+                              itemURL: Self.url(kAXURLAttribute, of: item))
+        guard decideDockClick(click, enabled: s.dockClickEnabled, tapHealthy: tapHealthy, frontmostAppURL: front,
+                              frontmostAppHasWindowOnStage: s.managed.contains { $0.pid == pid }) == .intercept
+        else { return .pass }
+        swallowedMouseDown = true
+        return .dockClick(pid)
     }
 
     /// Intercepts Cmd-M (by the character typed, so any keyboard layout) on a managed
@@ -284,6 +380,14 @@ final class MinimizeInterceptor: @unchecked Sendable {
         let element = v as! AXUIElement
         AXUIElementSetMessagingTimeout(element, hitTestTimeout)
         return element
+    }
+
+    /// A URL-valued attribute (bounded by the element's own timeout).
+    private static func url(_ attribute: String, of e: AXUIElement) -> URL? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(e, attribute as CFString, &value) == .success,
+              let v = value, CFGetTypeID(v) == CFURLGetTypeID() else { return nil }
+        return (v as! CFURL) as URL
     }
 
     private static func ref(of window: AXUIElement) -> WindowRef? {

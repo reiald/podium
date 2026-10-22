@@ -17,6 +17,8 @@ final class Settings: ObservableObject {
     @Published var windowGrouping: WindowGrouping {
         didSet { defaults.set(windowGrouping.rawValue, forKey: "appWindowGrouping") }
     }
+    /// "Click an app's Dock icon to minimize it to the strip".
+    @Published var dockClickMinimizes: Bool { didSet { defaults.set(dockClickMinimizes, forKey: "dockClickMinimizes") } }
     /// The onboarding window was completed once.
     @Published var onboarded: Bool { didSet { defaults.set(onboarded, forKey: "onboarded") } }
     /// Podium turned Apple's Stage Manager off (so the menu offers to turn it back on).
@@ -42,6 +44,7 @@ final class Settings: ObservableObject {
         minimizeBehavior = defaults.string(forKey: "minimizeBehavior").flatMap(MinimizeBehavior.init(rawValue:)) ?? .strip
         autoHide = defaults.object(forKey: "autoHide") as? Bool ?? true
         windowGrouping = defaults.string(forKey: "appWindowGrouping").flatMap(WindowGrouping.init(rawValue:)) ?? .allAtOnce
+        dockClickMinimizes = defaults.bool(forKey: "dockClickMinimizes")
         onboarded = defaults.bool(forKey: "onboarded")
         turnedOffAppleStageManager = defaults.bool(forKey: "turnedOffAppleStageManager")
         let d = StripCustomization.defaults
@@ -63,5 +66,6 @@ final class Settings: ObservableObject {
         minimizeBehavior = .strip
         autoHide = true
         windowGrouping = .allAtOnce
+        dockClickMinimizes = false
     }
 }

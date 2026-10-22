@@ -35,6 +35,10 @@ final class Coordinator {
     var minimizeBehavior: MinimizeBehavior = .strip {
         didSet { publishMinimizeState() }
     }
+    /// A plain click on the frontmost app's Dock icon sends its on-stage windows to the strip.
+    var dockClickMinimizes = false {
+        didSet { publishMinimizeState() }
+    }
     /// False: the strip never slides away (auto-hide bypassed).
     var autoHideEnabled = true {
         didSet { presenter?.setAutoHideEnabled(autoHideEnabled) }
@@ -137,6 +141,14 @@ final class Coordinator {
                 return
             }
             if !self.minimizeToStrip(w) { self.sendToDock(w) }
+        } onDockClick: { [weak self] pid in
+            // The Dock never saw the click: if minimizing no longer applies, the click still
+            // does what a Dock click does.
+            guard let self else { return Self.openLikeDockClick(pid: pid) }
+            if !self.minimizeAppToStrip(pid: pid) {
+                Self.openLikeDockClick(pid: pid)
+                if self.isRunning { self.handle(.appActivated(pid)) }
+            }
         }
         self.interceptor = interceptor
         interceptor.start()
@@ -209,6 +221,8 @@ final class Coordinator {
         defer { applying = false }
         process(e)
         while !pending.isEmpty { process(pending.removeFirst()) }
+        // An app activation can leave the board as it was; the frontmost app still changed.
+        publishMinimizeState()
     }
 
     /// Shows the stage (strip click).
@@ -303,6 +317,39 @@ final class Coordinator {
         return true
     }
 
+    /// Dock-icon click on the frontmost app (Dock-click setting on): the app's on-stage windows
+    /// fly to the strip as with minimize to strip. All at Once they go together as one stage at
+    /// the front of the strip; One at a Time they join the app's pile. Other apps' windows stay
+    /// on stage; an emptied stage area is the desktop.
+    /// False (nothing changed) if it no longer applies; the caller then does the stock click.
+    @discardableResult
+    func minimizeAppToStrip(pid: pid_t) -> Bool {
+        guard !applying, isRunning,
+              let leaving = board.activeStage?.windows.first(where: { $0.pid == pid && canMinimizeToStrip($0) }) else {
+            NSLog("Podium: Dock-click minimize of pid %d no longer applies; activating it instead", pid)
+            return false
+        }
+        let old = board
+        board.sendAppToStrip(pid: pid)
+        if let front = board.activeStage?.windows.first { board.windowFocused(front) }
+        apply(from: old)
+        // The app's windows are about to be parked and must not keep keyboard focus.
+        handOffFocus(from: leaving)
+        return true
+    }
+
+    /// What a Dock click on a running app does: activates it and sends it a reopen event.
+    private static func openLikeDockClick(pid: pid_t) {
+        guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
+        guard let url = app.bundleURL else {
+            app.activate()
+            return
+        }
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+            if let error { NSLog("Podium: could not open %@ after a Dock click: %@", url.path, error.localizedDescription) }
+        }
+    }
+
     /// Keyboard focus must never stay on a parked (invisible) window: the active stage's
     /// front window takes it, or the desktop when the stage area is empty. `w` is the
     /// window losing focus.
@@ -351,7 +398,10 @@ final class Coordinator {
     private func publishMinimizeState() {
         guard let interceptor else { return }
         let managed = isRunning ? Set((board.activeStage?.windows ?? []).filter(canMinimizeToStrip)) : []
-        interceptor.update(.init(enabled: isRunning, behavior: minimizeBehavior, managed: managed))
+        let front = NSWorkspace.shared.frontmostApplication
+        interceptor.update(.init(enabled: isRunning, behavior: minimizeBehavior, managed: managed,
+                                 dockClickEnabled: isRunning && dockClickMinimizes,
+                                 frontmostPid: front?.processIdentifier, frontmostURL: front?.bundleURL))
     }
 
     /// Fallback for minimizes the interceptor didn't see (Window menu, custom title bars, a
@@ -748,6 +798,7 @@ final class Coordinator {
         runner?.screensChanged(layout: layout)
         presenter?.boardChanged()
         publishMinimizeState()
+        interceptor?.refreshDockFrame()
     }
 
     /// Manageable windows of regular apps, in on-screen z-order from back to front.

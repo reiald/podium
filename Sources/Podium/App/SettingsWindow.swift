@@ -40,6 +40,10 @@ struct SettingsView: View {
                     Text("Dock").tag(MinimizeBehavior.dock)
                 }
                 .pickerStyle(.segmented)
+                Toggle(isOn: $settings.dockClickMinimizes) {
+                    Text("Click an app's Dock icon to minimize it to the strip")
+                    Text("Turn off the same option in other apps, such as Vorssaint.")
+                }
             }
             HStack {
                 Spacer()
