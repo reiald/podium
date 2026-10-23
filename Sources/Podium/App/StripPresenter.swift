@@ -49,8 +49,6 @@ final class StripPresenter {
     private static let pollInterval = 1.0 / 30.0
     /// Overlap frames are re-read every this many polls (30 Hz / 3 = 10 Hz).
     private static let frameRefreshEvery = 3
-    /// A title-bar drag must move the window at least this far to count.
-    private static let minimumDragDistance: CGFloat = 2
 
     private let mover: WindowMover
     private let runner: TransitionRunner
@@ -74,6 +72,7 @@ final class StripPresenter {
     private static let lostMouseUpDelay: TimeInterval = 0.25
     /// Active-stage window frames at the last mouse-down (drag-out detection).
     private var framesAtMouseDown: [WindowRef: CGRect] = [:]
+    private var mouseDownAt: CGPoint = .zero
     /// While the app view is open: the app's windows on the active stage (more closes it).
     private var appViewOnStage: Set<WindowRef> = []
     /// Esc monitors, only while the app view is open.
@@ -300,6 +299,7 @@ final class StripPresenter {
         // Another app got the click: it was outside the strip's items.
         closeAppView(reason: "click outside")
         framesAtMouseDown = activeStageFrames()
+        mouseDownAt = Self.location(of: event)
         if wallpaperClickEnabled, board().activeStage != nil {
             wallpaperPress.began(at: Self.location(of: event), time: event.timestamp,
                                  modifiers: Self.modifiers(event.modifierFlags))
@@ -309,8 +309,8 @@ final class StripPresenter {
         }
     }
 
-    /// A stage window whose title bar was dragged and released over the band: the one
-    /// active-stage window that moved without changing size since the mouse went down.
+    /// A stage window whose title bar was dragged and released over the band
+    /// (`titleBarDragged`): a window that moved by itself during the press is no drag.
     private func mouseUp(_ event: NSEvent) {
         defer { framesAtMouseDown = [:] }
         let p = Self.location(of: event)
@@ -319,16 +319,9 @@ final class StripPresenter {
             let click = wallpaperPress.released(at: p, time: event.timestamp) && layout.screen.contains(p) && !band.contains(p)
             onWallpaperPressEnded(click ? p : nil)
         }
-        guard !framesAtMouseDown.isEmpty, !runner.isHidden, band.contains(Self.pointer()) else { return }
-        let now = activeStageFrames()
-        let moved = framesAtMouseDown.filter { w, before in
-            guard let after = now[w] else { return false }
-            let distance = hypot(after.minX - before.minX, after.minY - before.minY)
-            // A resize also moves the origin; only a move keeps the size.
-            let sameSize = abs(after.width - before.width) <= 1 && abs(after.height - before.height) <= 1
-            return distance >= Self.minimumDragDistance && sameSize
-        }
-        guard moved.count == 1, let (w, before) = moved.first else { return }
+        guard !framesAtMouseDown.isEmpty, !runner.isHidden else { return }
+        guard let (w, before) = titleBarDragged(before: framesAtMouseDown, after: activeStageFrames(),
+                                                pressedAt: mouseDownAt, releasedAt: p, band: band) else { return }
         onDragOut(w, before)
     }
 
