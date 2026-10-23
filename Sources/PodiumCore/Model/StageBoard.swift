@@ -35,13 +35,14 @@ public struct Stage: Identifiable, Equatable, Sendable {
 ///   `appActivated` and `windowOpened` never pick one as the app's most recent one, and
 ///   `windowFocused` of one is a no-op.
 /// - Activating a stage makes it the most recently used.
+/// - After every mutation each app has at most one single-app strip stage (in One at a Time
+///   a *pile* when it holds two or more windows): they merge into the one nearest the front
+///   of the strip. Stages holding a minimized window and stages mixing apps (manual
+///   combines) never merge. All at Once, so a click on an app's item brings all its windows.
 ///
 /// With `grouping == .oneAtATime` (`allAtOnce` is the default and follows only the rules above):
 ///
-/// - A *pile* is a strip stage of two or more windows of one app. After every mutation each
-///   app has at most one pile-or-single-app strip stage: they merge into the one nearest the
-///   front of the strip, keeping its window order. Stages holding a minimized window and
-///   stages mixing apps (manual combines) never merge.
+/// - A pile keeps its window order when piles merge.
 /// - Bringing a window of a pile on stage (`windowFocused`, `appActivated`, `activate`,
 ///   `select`) gives it a new stage of its own; the app's windows that were on stage join its
 ///   pile at the front (at the back for `select`, so repeated clicks cycle through the pile);
@@ -474,10 +475,11 @@ public struct StageBoard: Equatable, Sendable {
         }
     }
 
-    /// One at a Time: merges each app's single-app strip stages into the one nearest the
-    /// front of the strip (its windows first, then the others' in strip order).
+    /// Merges each app's single-app strip stages into the one nearest the front of the strip,
+    /// so an app has one strip item. One at a Time keeps its windows first, then the others'
+    /// in strip order (cycle order); All at Once orders them most recently focused first, and
+    /// a click on the item brings all of them on stage.
     private mutating func mergePiles() {
-        guard grouping == .oneAtATime else { return }
         var pileOf: [Int32: UUID] = [:]
         for id in mru {
             guard let i = index(of: id), let pid = singleApp(at: i) else { continue }
@@ -487,7 +489,9 @@ public struct StageBoard: Equatable, Sendable {
             }
             let windows = stages[i].windows
             deleteStage(at: i)
-            stages[index(of: target)!].windows += windows
+            let t = index(of: target)!
+            stages[t].windows += windows
+            if grouping == .allAtOnce { sortWindows(inStageAt: t) }
         }
     }
 

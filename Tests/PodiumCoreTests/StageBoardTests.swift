@@ -923,3 +923,38 @@ private func mixedStripStage() -> (StageBoard, UUID) {
     #expect(b == before)
     #expect(b.activeStage?.windows == [w(2, 20)])
 }
+
+// MARK: - All at Once: one strip item per app
+
+/// Two Finder windows on stage, one dragged into the strip, then another app comes on stage:
+/// Finder's windows meet again in one strip item, and a click on it brings both back.
+@Test func allAtOnceAppWindowsShareOneStripItem() {
+    let f1 = WindowRef(pid: 1, windowID: 10), f2 = WindowRef(pid: 1, windowID: 11)
+    let b = WindowRef(pid: 2, windowID: 20)
+    var board = StageBoard(displayID: 1)
+    board.windowOpened(b)
+    board.windowOpened(f1)
+    board.windowOpened(f2)
+    let finderStage = board.activeStageID!
+    board.moveToOwnStage(f2)
+    board.activate(stageID: finderStage)
+    board.windowFocused(b)
+    let finder = board.stages.filter { $0.windows.contains { $0.pid == 1 } }
+    #expect(finder.count == 1)
+    #expect(Set(finder.first?.windows ?? []) == [f1, f2])
+    board.select(stageID: finder[0].id)
+    #expect(Set(board.activeStage?.windows ?? []) == [f1, f2])
+}
+
+/// A window minimized to the strip keeps its own item.
+@Test func allAtOnceMinimizedWindowKeepsItsOwnStripItem() {
+    let f1 = WindowRef(pid: 1, windowID: 10), f2 = WindowRef(pid: 1, windowID: 11)
+    let b = WindowRef(pid: 2, windowID: 20)
+    var board = StageBoard(displayID: 1)
+    board.windowOpened(b)
+    board.windowOpened(f1)
+    board.windowOpened(f2)
+    board.minimize(f2)
+    board.windowFocused(b)
+    #expect(board.stages.filter { $0.windows.contains { $0.pid == 1 } }.count == 2)
+}
