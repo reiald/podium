@@ -96,7 +96,7 @@ final class Coordinator {
         self.ledger = ledger
         self.capture = capture
         self.unparkRetry = UnparkRetry(mover: mover)
-        self.board = StageBoard(displayID: Screens.all.first?.id ?? 0)
+        self.board = StageBoard(displayID: Screens.all.first?.id ?? 0, maximumRowCount: Tuning.initial.maxRowCount)
     }
 
     // MARK: - Lifecycle
@@ -265,9 +265,8 @@ final class Coordinator {
     func select(stageID: UUID) {
         guard isRunning, !applying else { return }
         let old = board
-        // Makes its front window the app's most recent one, so the app activation that
-        // follows maps back to this stage rather than another stage of the same app.
-        // One at a Time, a pile's front window comes on stage alone.
+        // Its front window comes to the front, so the app activation that follows maps back
+        // to this stage rather than another group of the same app.
         board.select(stageID: stageID)
         systemFocus.stageChosen(at: CACurrentMediaTime())
         apply(from: old)
@@ -281,18 +280,16 @@ final class Coordinator {
         }
     }
 
-    /// Shift-click: the stage's front window joins the active stage.
+    /// Shift-click: the item joins the active stage's user set, as a drop of it would (One
+    /// at a Time, an app's item gives its front window).
     func addFrontWindowToActive(stageID: UUID) {
-        guard isRunning, !applying, let front = board.stages.first(where: { $0.id == stageID })?.windows.first else { return }
-        let old = board
-        board.addToActiveStage(front)
-        apply(from: old)
+        combineIntoActive(stageID: stageID, dragged: nil)
     }
 
-    /// A strip thumbnail dragged onto the stage: its windows join the active stage. On the
-    /// desktop there is nothing to join; the stage just comes on stage, as with a click.
-    /// One at a Time, a pile gives exactly the `dragged` window, even if it reordered
-    /// mid-drag (`StageBoard.combineIntoActive(stageID:dragged:)`).
+    /// A strip thumbnail dragged onto the stage: its windows join the active stage's user
+    /// set. On the desktop there is nothing to join; the item just comes on stage, as with a
+    /// click. One at a Time, an app's item gives exactly the `dragged` window, even if it
+    /// reordered mid-drag (`StageBoard.combineIntoActive(stageID:dragged:)`).
     func combineIntoActive(stageID: UUID, dragged: WindowRef?) {
         guard isRunning, !applying else { return }
         let old = board
@@ -321,25 +318,17 @@ final class Coordinator {
         if old.activeStageID == nil { activateFrontApp() }
     }
 
-    /// A stage window's title bar dragged into the strip band: the window gets its own stage
-    /// (`moveToOwnStage`), and, as in Stage Manager, that stage goes to the strip while the
-    /// rest of the old stage stays on screen. It comes back to `restoreTo`, where it was
-    /// before the drag, not to where it was dropped over the band.
+    /// A stage window's title bar dragged into the strip band: as in Stage Manager, the
+    /// window leaves the stage (and its user set) for its app's strip item, minimized to the
+    /// strip, while the rest of the stage stays on screen (`StageBoard.minimizeToStrip`). It
+    /// comes back to `restoreTo`, where it was before the drag, not to where it was dropped
+    /// over the band.
     func dragOut(_ w: WindowRef, restoreTo: CGRect) {
-        guard isRunning, !applying, let previous = board.activeStageID,
-              board.activeStage?.windows.contains(w) == true else { return }
+        guard isRunning, !applying, board.activeStage?.windows.contains(w) == true else { return }
         let old = board
-        if board.grouping == .oneAtATime {
-            // It joins its app's pile; a lone window stays, as with `moveToOwnStage`.
-            guard (board.activeStage?.windows.count ?? 0) > 1 else { return }
-            board.moveToPile(w)
-        } else {
-            board.moveToOwnStage(w)
-        }
+        board.minimizeToStrip(w)
         guard board != old else { return }
         runner?.setRestoreFrame(restoreTo, for: w)
-        if board.grouping == .allAtOnce { board.activate(stageID: previous) }
-        if let front = board.activeStage?.windows.first { board.windowFocused(front) }
         apply(from: old)
         // The dragged window is about to be parked and must not keep keyboard focus.
         handOffFocus(from: w)
@@ -392,31 +381,19 @@ final class Coordinator {
         isRunning && board.activeStage?.windows.contains(w) == true && !mover.isParked(w) && !board.isMinimized(w)
     }
 
-    /// Minimize to strip: the window is parked, not minimized. It gets its own stage at the
-    /// front of the strip and flies there; the rest of its stage stays on screen, and if it
-    /// was alone the stage area is left empty (desktop).
+    /// Minimize to strip: the window is parked, not minimized in macOS. On the board it is
+    /// minimized to the strip (`StageBoard.minimizeToStrip`): it flies to its app's strip
+    /// item, the rest of its stage stays on screen, and if it was alone the stage area is
+    /// left empty (desktop).
     /// False (nothing changed) if it no longer applies; the caller then sends it to the Dock.
     @discardableResult
     func minimizeToStrip(_ w: WindowRef) -> Bool {
-        guard !applying, canMinimizeToStrip(w), let previous = board.activeStageID,
-              let count = board.activeStage?.windows.count else {
+        guard !applying, canMinimizeToStrip(w) else {
             podiumLog("Podium: minimize to strip of %u (pid %d) no longer applies; using the Dock", w.windowID, w.pid)
             return false
         }
         let old = board
-        if board.grouping == .oneAtATime {
-            // It joins its app's pile at the front of the strip.
-            board.moveToPile(w)
-            if let front = board.activeStage?.windows.first { board.windowFocused(front) }
-        } else if count > 1 {
-            board.moveToOwnStage(w)
-            board.activate(stageID: previous)
-            if let front = board.activeStage?.windows.first { board.windowFocused(front) }
-        } else {
-            // Activating first puts the stage at the front of the most-recently-used order.
-            board.activate(stageID: previous)
-            board.activate(stageID: nil)
-        }
+        board.minimizeToStrip(w)
         apply(from: old)
         // The parked window must not keep keyboard focus: the stage's next window takes it,
         // or the desktop when the stage is now empty.
@@ -424,10 +401,9 @@ final class Coordinator {
         return true
     }
 
-    /// Dock-icon click on the frontmost app (Dock-click setting on): the app's on-stage windows
-    /// fly to the strip as with minimize to strip. All at Once they go together as one stage at
-    /// the front of the strip; One at a Time they join the app's pile. Other apps' windows stay
-    /// on stage; an emptied stage area is the desktop.
+    /// Dock-icon click on the frontmost app (Dock-click setting on): each of the app's on-stage
+    /// windows is minimized to the strip, so they fly to the app's strip item. Other apps'
+    /// windows stay on stage; an emptied stage area is the desktop.
     /// False (nothing changed) if it no longer applies; the caller then does the stock click.
     @discardableResult
     func minimizeAppToStrip(pid: pid_t) -> Bool {
@@ -439,8 +415,9 @@ final class Coordinator {
             return false
         }
         let old = board
-        board.sendAppToStrip(pid: pid)
-        if let front = board.activeStage?.windows.first { board.windowFocused(front) }
+        for x in (board.activeStage?.windows ?? []) where x.pid == pid && canMinimizeToStrip(x) {
+            board.minimizeToStrip(x)
+        }
         apply(from: old)
         // The app's windows are about to be parked and must not keep keyboard focus.
         handOffFocus(from: leaving)
@@ -448,7 +425,8 @@ final class Coordinator {
     }
 
     /// Dock-icon click on the frontmost app with nothing on stage but windows in the strip
-    /// (it was just minimized there): they come back, as a strip click on them would.
+    /// (it was just minimized there): every one of its windows minimized to the strip comes
+    /// back, the front one in front; with none, the app is activated as usual.
     /// False (nothing changed) if it no longer applies; the caller then does the stock click.
     @discardableResult
     func restoreAppFromStrip(pid: pid_t) -> Bool {
@@ -456,7 +434,12 @@ final class Coordinator {
               !(board.activeStage?.windows.contains { $0.pid == pid } ?? false),
               appsInStrip().contains(pid) else { return false }
         let old = board
-        board.appActivated(pid: pid)
+        let minimized = board.stripStages.flatMap(\.windows).filter { $0.pid == pid && board.isMinimizedToStrip($0) }
+        if minimized.isEmpty {
+            board.appActivated(pid: pid)
+        } else {
+            for w in minimized.reversed() { board.windowFocused(w) }
+        }
         apply(from: old)
         return true
     }
@@ -748,10 +731,10 @@ final class Coordinator {
             board.appUnhidden(pid: pid)
             // Windows it opened while hidden (or that were hidden at launch) join the board,
             // without taking the stage from whatever is on it.
-            let activeBefore = board.activeStageID
+            let frontBefore = board.activeStage?.windows.first
             let unseen = AX.isHung(pid) ? [] : backend.manageableWindows(of: pid).filter { !isOnBoard($0) && !mover.isParked($0) }
             for w in unseen { board.windowOpened(w) }
-            if !unseen.isEmpty { board.activate(stageID: activeBefore) }
+            if !unseen.isEmpty { restoreStage(front: frontBefore) }
             // Unhide usually comes with the app's activation, before or after this: either
             // way its stage comes on stage. What is still off stage then gets parked.
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { board.appActivated(pid: pid) }
@@ -1065,15 +1048,27 @@ final class Coordinator {
             }
             if !dropped.isEmpty { Task { for w in dropped { await capture.forget(w) } } }
         }
-        let activeBefore = board.activeStageID
-        for w in onScreenWindowsBackToFront() where !isOnBoard(w) { board.windowOpened(w) }
+        let frontBefore = board.activeStage?.windows.first
+        let unseen = onScreenWindowsBackToFront().filter { !isOnBoard($0) }
+        for w in unseen { board.windowOpened(w) }
         // New windows may have switched stages; the frontmost app's stage wins, else the old one.
-        if let activeBefore { board.activate(stageID: activeBefore) }
+        if !unseen.isEmpty, frontBefore != nil { restoreStage(front: frontBefore) }
         if let front = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             board.appActivated(pid: front)
         }
         reconcile()
         screensChanged()
+    }
+
+    /// After windows joined the board without being chosen (each `windowOpened` proposes
+    /// its window): the stage that was on screen comes back, by its front window, or the
+    /// desktop if there was none.
+    private func restoreStage(front: WindowRef?) {
+        if let front {
+            board.windowFocused(front)
+        } else {
+            board.showDesktop()
+        }
     }
 
     private func screensChanged() {

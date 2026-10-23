@@ -7,7 +7,7 @@ import Foundation
 /// - `entering`: windows of the new active stage that were in a non-active stage before
 ///   (they fly out of the strip). Windows new to the board never enter: they are already
 ///   on screen.
-/// - `stripOrder`: the new board's strip stages, most recently used first.
+/// - `stripOrder`: the new board's strip stages, in strip order.
 ///
 /// Both lists keep the new board's (most-recently-focused) window order.
 public struct TransitionPlan: Equatable, Sendable {

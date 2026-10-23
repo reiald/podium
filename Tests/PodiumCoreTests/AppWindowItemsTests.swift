@@ -40,9 +40,9 @@ private func threeWindowsThenOther() -> StageBoard {
     #expect(Set(items.map(\.id)).isDisjoint(with: b.stages.map(\.id)))
     #expect(appWindowItemID(w(1, 10)) != appWindowItemID(w(10, 1)))
     #expect(appWindowItemID(w(-1, 0)) == appWindowItemID(w(-1, 0)))
-    // Version nibble 8: a random (version 4) stage id can never be one.
+    // Version nibble 8: a stage id (version 5, `stageID(of:)`) can never be one.
     #expect(items.allSatisfy { $0.id.uuid.6 >> 4 == 8 })
-    #expect(b.stages.allSatisfy { $0.id.uuid.6 >> 4 == 4 })
+    #expect(b.stages.allSatisfy { $0.id.uuid.6 >> 4 == 5 })
 }
 
 @Test func appWindowItemsAllAtOnceSpanMixedStages() {
@@ -52,8 +52,7 @@ private func threeWindowsThenOther() -> StageBoard {
     b.addToActiveStage(w(1, 10))               // [10, 20] mixed
     b.windowOpened(w(4, 40))                   // [10, 20] to the strip
     b.windowFocused(w(1, 10))
-    b.windowOpened(w(1, 11))                   // joins [10, 20]
-    b.moveToOwnStage(w(1, 11))                 // [11] alone
+    b.windowOpened(w(1, 11))                   // [11] alone, in app 1's own group
     b.windowFocused(w(4, 40))
     #expect(appWindowItems(board: b, pid: 1).map(\.windows) == [[w(1, 11)], [w(1, 10)]])
     b.windowFocused(w(2, 20))                  // the mixed stage comes on stage: 10 with it

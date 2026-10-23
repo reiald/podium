@@ -11,7 +11,7 @@ private func w(_ pid: Int32, _ id: UInt32) -> WindowRef { WindowRef(pid: pid, wi
     old.windowOpened(w(2, 20))
     // Now stage 2 is active; switch back to stage 1.
     var new = old
-    new.activate(stageID: first)
+    new.select(stageID: first)
 
     let plan = transitionPlan(from: old, to: new)
     #expect(plan.leaving == [w(2, 20)])
@@ -85,7 +85,7 @@ private func w(_ pid: Int32, _ id: UInt32) -> WindowRef { WindowRef(pid: pid, wi
     let first = old.activeStageID!
     old.windowOpened(w(2, 20))
     var new = old
-    new.combineIntoActive(stageID: first)
+    new.combineIntoActive(stageID: first, dragged: nil)
 
     let plan = transitionPlan(from: old, to: new)
     #expect(plan.leaving.isEmpty)

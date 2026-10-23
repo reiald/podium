@@ -168,7 +168,7 @@ final class TransitionRunner {
         relayoutStrip(spring: layout.tuning.transitionSpring)
     }
 
-    /// What the strip shows, most recently used first: the board's strip stages, or the
+    /// What the strip shows, in strip order: the board's strip stages, or the
     /// app view's items.
     func stripStages() -> [Stage] {
         stripStages(of: board())

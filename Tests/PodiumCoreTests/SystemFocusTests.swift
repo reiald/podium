@@ -43,13 +43,13 @@ private func board() -> StageBoard {
     #expect(!SystemFocus().ignores(w(2, 20), at: 0, board: board()))
 }
 
-/// A strip click on one of Teams' two stages: Teams then reports its other window, still in
+/// One at a Time, a strip click on one of Teams' two windows: Teams then reports its other window, still in
 /// the strip, as focused. That must not swap it in for the one chosen.
 @Test func ignoresTheAppsOtherStripWindowRightAfterAStripClick() {
     var b = StageBoard(displayID: 1)
+    b.setGrouping(.oneAtATime)
     b.windowOpened(w(1, 10))
     b.windowOpened(w(1, 11))
-    b.moveToOwnStage(w(1, 11))
     let chosen = b.stages.first { $0.windows == [w(1, 10)] }!.id
     b.select(stageID: chosen)
     var c = SystemFocus()

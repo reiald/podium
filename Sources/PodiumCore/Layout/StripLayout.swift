@@ -35,7 +35,7 @@ public func stageArea(in screen: CGRect, side: StripSide, tuning: Tuning) -> CGR
     return oriented(rightArea, in: screen, side: side)
 }
 
-/// `stages` must already be most-recently-used first; only the first `maxRowCount` get slots.
+/// `stages` must already be in strip order; only the first `maxRowCount` get slots.
 public func stripSlots(for stages: [Stage], in screen: CGRect, side: StripSide, tuning: Tuning) -> [StripSlot] {
     let shown = stages.prefix(tuning.maxRowCount)
     guard !shown.isEmpty else { return [] }
