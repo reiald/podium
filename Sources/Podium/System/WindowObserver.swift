@@ -105,7 +105,7 @@ final class WindowObserver {
         guard apps[pid] == nil else { return }
         var created: AXObserver?
         guard AXObserverCreate(pid, Self.callback, &created) == .success, let observer = created else {
-            NSLog("Podium: AXObserverCreate failed for pid %d", pid)
+            podiumLog("Podium: AXObserverCreate failed for pid %d", pid)
             return
         }
         let app = AX.application(pid)
@@ -116,7 +116,7 @@ final class WindowObserver {
             if err == .success || err == .notificationAlreadyRegistered {
                 attached = true
             } else if retriesLeft == 0 {
-                NSLog("Podium: observing %@ for pid %d failed: %d", name, pid, err.rawValue)
+                podiumLog("Podium: observing %@ for pid %d failed: %d", name, pid, err.rawValue)
             }
         }
         guard attached else {
@@ -125,7 +125,7 @@ final class WindowObserver {
                     MainActor.assumeIsolated { self?.attach(pid: pid, retriesLeft: retriesLeft - 1, announceExisting: announceExisting) }
                 }
             } else {
-                NSLog("Podium: could not observe pid %d", pid)
+                podiumLog("Podium: could not observe pid %d", pid)
             }
             return
         }
@@ -200,7 +200,7 @@ final class WindowObserver {
         for name in Self.windowNotifications {
             let err = AXObserverAddNotification(o.observer, element, name as CFString, refcon)
             if err != .success && err != .notificationAlreadyRegistered {
-                NSLog("Podium: observing %@ on window %u (pid %d) failed: %d", name, ref.windowID, pid, err.rawValue)
+                podiumLog("Podium: observing %@ on window %u (pid %d) failed: %d", name, ref.windowID, pid, err.rawValue)
             }
         }
         o.windows.append((element, ref))

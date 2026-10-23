@@ -249,7 +249,7 @@ actor Capture {
             try await stream.stopCapture()
         } catch {
             // Already stopped (e.g. the window closed); nothing to clean up.
-            NSLog("Podium: stopping live capture of %u: %@", session.window.windowID, String(describing: error))
+            podiumLog("Podium: stopping live capture of %u: %@", session.window.windowID, String(describing: error))
         }
     }
 
@@ -259,7 +259,7 @@ actor Capture {
         guard CGPreflightScreenCaptureAccess() else {
             if !loggedPermission {
                 loggedPermission = true
-                NSLog("Podium: Screen Recording permission missing; window capture disabled")
+                podiumLog("Podium: Screen Recording permission missing; window capture disabled")
                 // Shows the system prompt once; the grant takes effect after relaunch.
                 CGRequestScreenCaptureAccess()
             }
@@ -280,7 +280,7 @@ actor Capture {
     private func logFailure(_ w: WindowRef, _ what: String, _ error: Error) {
         if case CaptureError.permissionMissing = error { return } // logged once globally
         guard loggedFailures.insert(w).inserted else { return }
-        NSLog("Podium: %@ capture of %u (pid %d) failed: %@", what, w.windowID, w.pid, String(describing: error))
+        podiumLog("Podium: %@ capture of %u (pid %d) failed: %@", what, w.windowID, w.pid, String(describing: error))
     }
 
     /// `size` scaled down (never up) to fit `bounds`, keeping its aspect ratio; at least 1x1.
@@ -315,7 +315,7 @@ private final class LiveSession: NSObject, SCStreamOutput, SCStreamDelegate, @un
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        NSLog("Podium: live capture of %u stopped: %@", window.windowID, String(describing: error))
+        podiumLog("Podium: live capture of %u stopped: %@", window.windowID, String(describing: error))
     }
 
     /// Only `.complete` frames carry new content; idle frames repeat the last one.

@@ -105,7 +105,7 @@ final class DebugCards {
         let line = String(format: "Podium debug-cards: frames=%d dropped=%d maxDt=%.2f ms",
                           stats.frames, stats.dropped, stats.maxDt * 1000)
         logger.log("\(line, privacy: .public) retargets=\(self.retargets, privacy: .public)")
-        NSLog("%@", line)
+        podiumLog("%@", line)
         animator?.invalidate()
         NSApp.terminate(nil)
     }

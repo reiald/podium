@@ -137,7 +137,7 @@ enum AX {
             return was
         }
         if !wasHung {
-            NSLog("Podium: pid %d did not answer Accessibility within %.1f s; leaving its windows alone for %.0f s",
+            podiumLog("Podium: pid %d did not answer Accessibility within %.1f s; leaving its windows alone for %.0f s",
                   pid, messagingTimeout, hungCooldown)
         }
         return err

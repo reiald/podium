@@ -148,7 +148,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
     func start() {
         guard thread == nil else { return }
         guard AXIsProcessTrusted() else {
-            NSLog("Podium: not trusted for Accessibility; minimize interceptor off")
+            podiumLog("Podium: not trusted for Accessibility; minimize interceptor off")
             return
         }
         let ready = DispatchSemaphore(value: 0)
@@ -184,7 +184,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
         CFRunLoopWakeUp(runLoop)
         // A callback can be inside a hit-test (bounded at a few tenths of a second).
         if finished?.wait(timeout: .now() + 1) == .timedOut {
-            NSLog("Podium: minimize tap thread did not stop within 1 s")
+            podiumLog("Podium: minimize tap thread did not stop within 1 s")
         }
         tapRunLoop = nil
         thread = nil
@@ -208,7 +208,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
                                           options: .defaultTap, eventsOfInterest: CGEventMask(mask),
                                           callback: Self.callback,
                                           userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            NSLog("Podium: could not create the minimize event tap; minimizes go to the Dock")
+            podiumLog("Podium: could not create the minimize event tap; minimizes go to the Dock")
             AXUIElementSetMessagingTimeout(systemWide, 0)
             ready.signal()
             return
@@ -252,7 +252,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
            event.getIntegerValueField(.eventSourceUserData) == Self.replayTag { return false }
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            NSLog("Podium: minimize tap disabled (%u); re-enabling, passing through until healthy", type.rawValue)
+            podiumLog("Podium: minimize tap disabled (%u); re-enabling, passing through until healthy", type.rawValue)
             healthy = false
             swallowedMouseDown = false
             swallowedKeyCode = nil
@@ -277,7 +277,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
                                                  : keyDown(event, snapshot, tapHealthy: wasHealthy)
             if !wasHealthy, CACurrentMediaTime() - started < Self.healthyCallbackTime {
                 healthy = true
-                NSLog("Podium: minimize tap healthy again")
+                podiumLog("Podium: minimize tap healthy again")
             }
             switch outcome {
             case .pass:

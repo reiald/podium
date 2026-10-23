@@ -55,7 +55,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             debugCards.start()
             return
         }
-        NSLog("Podium: AXIsProcessTrusted=%d screenRecording=%d", AXIsProcessTrusted(), CGPreflightScreenCaptureAccess())
+        podiumLog("Podium: AXIsProcessTrusted=%d screenRecording=%d", AXIsProcessTrusted(), CGPreflightScreenCaptureAccess())
         installStatusItem()
         installSignalHandlers()
         observeSettings()
@@ -105,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if ax, !axWasTrusted {
             // Accessibility just (re)appeared: put back whatever is still parked, whether or
             // not Podium is going to manage windows.
-            NSLog("Podium: Accessibility is available; recovering")
+            podiumLog("Podium: Accessibility is available; recovering")
             mover.recover(visibleScreens: backend.visibleScreens())
         }
         axWasTrusted = ax
@@ -119,7 +119,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // path (every window restored) and the onboarding window says why.
         let appleStageManagerOn = AppleStageManager.isEnabled
         if appleStageManagerOn, !appleStageManagerWasOn, settings.enabled, onboarding?.isShowing != true {
-            NSLog("Podium: Apple's Stage Manager is on; restoring windows and pausing")
+            podiumLog("Podium: Apple's Stage Manager is on; restoring windows and pausing")
             showOnboarding()
         }
         appleStageManagerWasOn = appleStageManagerOn
@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Without Accessibility no window can move: stop everything but keep the ledger, so the
     /// recovery that runs when the permission returns puts the windows back.
     private func accessibilityRevoked() {
-        NSLog("Podium: Accessibility revoked; suspending")
+        podiumLog("Podium: Accessibility revoked; suspending")
         coordinator?.suspend()
         coordinator = nil
         refreshStatusIcon()
@@ -185,7 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func recoverWhileOff() {
         guard coordinator == nil, !debugHold, AXIsProcessTrusted(), !ledger.entries().isEmpty else { return }
-        NSLog("Podium: Space changed while not managing; retrying recovery of parked windows")
+        podiumLog("Podium: Space changed while not managing; retrying recovery of parked windows")
         mover.recover(visibleScreens: backend.visibleScreens())
     }
 
@@ -485,14 +485,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 guard let frame = backend.frame(of: w), let screen = Screens.containing(frame) else { continue }
                 let ok = mover.park(w, display: screen.frame, displayID: screen.id)
                 if ok { parked += 1 }
-                NSLog("Podium: debug park %u -> %@", w.windowID, ok ? "parked" : "failed")
+                podiumLog("Podium: debug park %u -> %@", w.windowID, ok ? "parked" : "failed")
             }
         }
         guard parked > 0 else { return }
         do {
             try "\(parked)\n".write(to: Self.debugParkMarkerURL, atomically: true, encoding: .utf8)
         } catch {
-            NSLog("Podium: could not write debug park marker: %@", String(describing: error))
+            podiumLog("Podium: could not write debug park marker: %@", String(describing: error))
         }
     }
 
@@ -503,23 +503,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
               let w = backend.manageableWindows(of: app.processIdentifier).first,
               let frame = backend.frame(of: w) else {
-            NSLog("Podium: debug capture: no manageable window of %@", bundleID)
+            podiumLog("Podium: debug capture: no manageable window of %@", bundleID)
             return
         }
         let capture = self.capture
         Task { @MainActor in
             do {
                 _ = try await capture.snapshot(w, pointSize: frame.size)
-                NSLog("Podium: debug capture: on-stage snapshot of %u ok", w.windowID)
+                podiumLog("Podium: debug capture: on-stage snapshot of %u ok", w.windowID)
             } catch {
-                NSLog("Podium: debug capture: on-stage snapshot of %u failed: %@", w.windowID, String(describing: error))
+                podiumLog("Podium: debug capture: on-stage snapshot of %u failed: %@", w.windowID, String(describing: error))
             }
             guard let screen = Screens.containing(frame),
                   mover.park(w, display: screen.frame, displayID: screen.id) else {
-                NSLog("Podium: debug capture: could not park %u", w.windowID)
+                podiumLog("Podium: debug capture: could not park %u", w.windowID)
                 return
             }
-            NSLog("Podium: debug capture: parked %u; live at 5 fps for 30 s", w.windowID)
+            podiumLog("Podium: debug capture: parked %u; live at 5 fps for 30 s", w.windowID)
 
             let stats = DebugFrameStats()
             let handle: LiveHandle
@@ -528,14 +528,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     MainActor.assumeIsolated { stats.record(image) }
                 }
             } catch {
-                NSLog("Podium: debug capture: startLive failed: %@", String(describing: error))
+                podiumLog("Podium: debug capture: startLive failed: %@", String(describing: error))
                 _ = mover.unpark(w)
                 return
             }
             try? await Task.sleep(nanoseconds: 30_000_000_000)
             await capture.stopLive(handle)
             let unparked = mover.unpark(w)
-            NSLog("Podium: debug capture: done; frames=%d distinct=%d changes=%d; unpark %@",
+            podiumLog("Podium: debug capture: done; frames=%d distinct=%d changes=%d; unpark %@",
                   stats.frames, stats.distinct.count, stats.changes, unparked ? "ok" : "failed")
         }
     }
@@ -557,7 +557,7 @@ private final class DebugFrameStats {
         frames += 1
         if changed { changes += 1 }
         distinct.insert(hash)
-        NSLog("Podium: debug capture: frame %d t=%.3f dt=%.3f %dx%d content=%@",
+        podiumLog("Podium: debug capture: frame %d t=%.3f dt=%.3f %dx%d content=%@",
               frames, now, lastTime.map { now - $0 } ?? 0, image.width, image.height,
               changed ? "changed" : (lastHash == nil ? "first" : "same"))
         lastHash = hash

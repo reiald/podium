@@ -108,7 +108,7 @@ final class Coordinator {
                                             unparkRetry: unparkRetry, layout: layout, board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
         else {
             // No display: nothing to animate on; instant moves only.
-            NSLog("Podium: no screen; stage switching without animation")
+            podiumLog("Podium: no screen; stage switching without animation")
             finishStart()
             return
         }
@@ -160,7 +160,7 @@ final class Coordinator {
             // still gets a minimize, the stock one. That holds even when this Coordinator
             // is gone by the time the interception arrives (Off, Quit in progress).
             guard let self else {
-                NSLog("Podium: minimize of %u (pid %d) arrived after stop; using the Dock", w.windowID, w.pid)
+                podiumLog("Podium: minimize of %u (pid %d) arrived after stop; using the Dock", w.windowID, w.pid)
                 backend.setMinimized(true, of: w)
                 return
             }
@@ -398,7 +398,7 @@ final class Coordinator {
     func minimizeToStrip(_ w: WindowRef) -> Bool {
         guard !applying, canMinimizeToStrip(w), let previous = board.activeStageID,
               let count = board.activeStage?.windows.count else {
-            NSLog("Podium: minimize to strip of %u (pid %d) no longer applies; using the Dock", w.windowID, w.pid)
+            podiumLog("Podium: minimize to strip of %u (pid %d) no longer applies; using the Dock", w.windowID, w.pid)
             return false
         }
         let old = board
@@ -433,7 +433,7 @@ final class Coordinator {
         // click meant to switch back to it, from Podium say, must activate it instead).
         guard !applying, isRunning, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid,
               let leaving = board.activeStage?.windows.first(where: { $0.pid == pid && canMinimizeToStrip($0) }) else {
-            NSLog("Podium: Dock-click minimize of pid %d no longer applies; activating it instead", pid)
+            podiumLog("Podium: Dock-click minimize of pid %d no longer applies; activating it instead", pid)
             return false
         }
         let old = board
@@ -474,7 +474,7 @@ final class Coordinator {
             return
         }
         NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
-            if let error { NSLog("Podium: could not open %@ after a Dock click: %@", url.path, error.localizedDescription) }
+            if let error { podiumLog("Podium: could not open %@ after a Dock click: %@", url.path, error.localizedDescription) }
         }
     }
 
@@ -541,7 +541,7 @@ final class Coordinator {
         let started = Date()
         unminimizing[w] = started.addingTimeInterval(Self.unminimizeQuiet)
         guard backend.setMinimized(false, of: w) else {
-            NSLog("Podium: could not un-minimize %u (pid %d); leaving it in the Dock", w.windowID, w.pid)
+            podiumLog("Podium: could not un-minimize %u (pid %d); leaving it in the Dock", w.windowID, w.pid)
             sendToDock(w)
             return
         }
@@ -553,14 +553,14 @@ final class Coordinator {
                     // Unreadable: most likely closing. Never park it; `.closed` cleans up.
                     timer.invalidate()
                     self.unminimizing[w] = nil
-                    NSLog("Podium: cannot read AXMinimized of %u (pid %d); fallback stopped", w.windowID, w.pid)
+                    podiumLog("Podium: cannot read AXMinimized of %u (pid %d); fallback stopped", w.windowID, w.pid)
                 case false?:
                     timer.invalidate()
                     if !self.minimizeToStrip(w) { self.sendToDock(w) }
                 case true?:
                     guard Date().timeIntervalSince(started) > Self.unminimizeTimeout else { return }
                     timer.invalidate()
-                    NSLog("Podium: %u (pid %d) still minimized after %.1f s; leaving it in the Dock",
+                    podiumLog("Podium: %u (pid %d) still minimized after %.1f s; leaving it in the Dock",
                           w.windowID, w.pid, Self.unminimizeTimeout)
                     self.sendToDock(w)
                 }
@@ -578,7 +578,7 @@ final class Coordinator {
             handle(.minimized(w))
         } else if !backend.setMinimized(true, of: w) {
             dockFallback.remove(w)
-            NSLog("Podium: could not minimize %u (pid %d); leaving it on screen", w.windowID, w.pid)
+            podiumLog("Podium: could not minimize %u (pid %d); leaving it on screen", w.windowID, w.pid)
         }
     }
 
@@ -864,7 +864,7 @@ final class Coordinator {
         // Full-screen windows are left alone: they come back through `checkFullScreen`.
         let owned = Set(board.stages.flatMap(\.windows)).union(fullScreen)
         guard ledger.entries().contains(where: { !owned.contains($0.window) }) else { return }
-        NSLog("Podium: Space changed; retrying recovery of windows no stage owns")
+        podiumLog("Podium: Space changed; retrying recovery of windows no stage owns")
         mover.recover(visibleScreens: backend.visibleScreens(), only: { !owned.contains($0) })
     }
 
@@ -955,7 +955,7 @@ final class Coordinator {
     private func show(_ windows: [WindowRef]) {
         for w in windows where !isHidden(w.pid) {
             batchTouched.insert(w)
-            if !unparkRetry.unpark(w) { NSLog("Podium: could not unpark %u (pid %d)", w.windowID, w.pid) }
+            if !unparkRetry.unpark(w) { podiumLog("Podium: could not unpark %u (pid %d)", w.windowID, w.pid) }
         }
     }
 
@@ -967,18 +967,18 @@ final class Coordinator {
         for w in windows where !mover.isParked(w) && !isHidden(w.pid) && !backend.isMinimized(w)
             && !backend.isFullScreen(w) {
             guard let frame = backend.frame(of: w) else {
-                NSLog("Podium: cannot read frame of %u (pid %d); not parking", w.windowID, w.pid)
+                podiumLog("Podium: cannot read frame of %u (pid %d); not parking", w.windowID, w.pid)
                 continue
             }
             guard let screen = Screens.containing(frame) else {
-                NSLog("Podium: no screen attached; not parking %u (pid %d)", w.windowID, w.pid)
+                podiumLog("Podium: no screen attached; not parking %u (pid %d)", w.windowID, w.pid)
                 continue
             }
             batchTouched.insert(w)
             if mover.park(w, display: screen.frame, displayID: screen.id) {
                 parked.append(w)
             } else {
-                NSLog("Podium: could not park %u (pid %d); leaving it on screen", w.windowID, w.pid)
+                podiumLog("Podium: could not park %u (pid %d); leaving it on screen", w.windowID, w.pid)
             }
         }
     }
@@ -1088,7 +1088,7 @@ final class Coordinator {
     private func onScreenWindowsBackToFront() -> [WindowRef] {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] else {
-            NSLog("Podium: CGWindowListCopyWindowInfo failed; seeding nothing")
+            podiumLog("Podium: CGWindowListCopyWindowInfo failed; seeding nothing")
             return []
         }
         var regular: [pid_t: Bool] = [:]

@@ -31,7 +31,7 @@ final class AXWindowBackend: WindowBackend {
     /// Space, a hung app, a non-regular app) is still alive and must not be forgotten.
     func liveWindows() -> Set<WindowRef> {
         guard let info = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else {
-            NSLog("Podium: CGWindowListCopyWindowInfo failed; reporting no live windows")
+            podiumLog("Podium: CGWindowListCopyWindowInfo failed; reporting no live windows")
             return []
         }
         var pidAlive: [Int32: Bool] = [:]
