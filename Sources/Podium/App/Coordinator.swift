@@ -57,7 +57,7 @@ final class Coordinator {
     /// their own (de)minimize and focus noise must not move stages meanwhile.
     private var unminimizing: [WindowRef: Date] = [:]
     /// The focus macOS hands on after a close is not followed into the strip.
-    private var closeFocus = CloseFocus()
+    private var systemFocus = SystemFocus()
     /// Windows the fallback gave up on: their `.minimized` takes the Dock path.
     private var dockFallback: Set<WindowRef> = []
     private static let unminimizePoll: TimeInterval = 0.02
@@ -269,6 +269,7 @@ final class Coordinator {
         // follows maps back to this stage rather than another stage of the same app.
         // One at a Time, a pile's front window comes on stage alone.
         board.select(stageID: stageID)
+        systemFocus.stageChosen(at: CACurrentMediaTime())
         apply(from: old)
         activateFrontApp()
     }
@@ -305,6 +306,7 @@ final class Coordinator {
         guard isRunning, !applying, isOnBoard(w) else { return }
         let old = board
         board.show(w)
+        systemFocus.stageChosen(at: CACurrentMediaTime())
         apply(from: old)
         activateFrontApp()
     }
@@ -660,7 +662,7 @@ final class Coordinator {
                 return
             case let .closed(forgetLedger):
                 fullScreen.remove(w)
-                closeFocus.closed(at: CACurrentMediaTime())
+                systemFocus.closed(at: CACurrentMediaTime())
                 board.windowClosed(w)
                 runner?.forget(w)
                 // A failed list query (empty answer) keeps the ledger entry.
@@ -676,7 +678,7 @@ final class Coordinator {
                 dropFullScreen(w)
                 break
             }
-            if closeFocus.ignores(w, at: CACurrentMediaTime(), board: board) { return keepStageAfterClose(from: w) }
+            if systemFocus.ignores(w, at: CACurrentMediaTime(), board: board) { return keepStageOnSystemFocus(from: w) }
             if !isOnBoard(w) {
                 // A window we never saw open (e.g. on another Space at launch).
                 guard shouldManage(w) else { return }
@@ -702,8 +704,8 @@ final class Coordinator {
         case let .appActivated(pid):
             // A hidden app being activated is shown again; `.appUnhidden` brings its stage.
             guard pid != getpid(), !isHidden(pid) else { return }
-            if closeFocus.ignores(appActivated: pid, at: CACurrentMediaTime(), board: board) {
-                return keepStageAfterClose(from: nil)
+            if systemFocus.ignores(appActivated: pid, at: CACurrentMediaTime(), board: board) {
+                return keepStageOnSystemFocus(from: nil)
             }
             // A press on the desktop activates Finder; if it turns out to be a wallpaper
             // click, Finder's most recent stage must not come on stage first.
@@ -722,13 +724,16 @@ final class Coordinator {
             if let focused, fullScreen.contains(focused) || backend.isFullScreen(focused) {
                 // Its full-screen Space came forward: the stages stay as they are.
                 dropFullScreen(focused)
+            } else if let focused, systemFocus.ignores(focused, at: CACurrentMediaTime(), board: board) {
+                // Its key window, off stage, rather than the stage just chosen.
+                return keepStageOnSystemFocus(from: focused)
             } else if let focused, isOnBoard(focused), !isInFlight(focused), !backend.isMinimized(focused) {
                 board.windowFocused(focused)
             } else {
                 board.appActivated(pid: pid)
             }
         case let .appTerminated(pid):
-            closeFocus.closed(at: CACurrentMediaTime())
+            systemFocus.closed(at: CACurrentMediaTime())
             fullScreen = fullScreen.filter { $0.pid != pid }
             board.appTerminated(pid: pid)
             let capture = self.capture
@@ -847,9 +852,9 @@ final class Coordinator {
 
     private static let closeRecheckDelay: TimeInterval = 0.5
 
-    /// macOS focused a strip window after a close: the stage stays as it is, and keyboard
-    /// focus goes back to it (or the desktop) instead of the invisible window.
-    private func keepStageAfterClose(from w: WindowRef?) {
+    /// The system focused a strip window on its own (`SystemFocus`): the stage stays as it is,
+    /// and keyboard focus goes back to it (or the desktop) instead of the invisible window.
+    private func keepStageOnSystemFocus(from w: WindowRef?) {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.isRunning else { return }
             self.handOffFocus(from: w)
