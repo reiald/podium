@@ -19,6 +19,13 @@ final class Settings: ObservableObject {
     }
     /// "Click an app's Dock icon to minimize it to the strip".
     @Published var dockClickMinimizes: Bool { didSet { defaults.set(dockClickMinimizes, forKey: "dockClickMinimizes") } }
+    /// Apps whose windows float over the stage.
+    @Published var floatingApps: FloatingApps {
+        didSet {
+            defaults.set(floatingApps.enabled, forKey: "floatingAppsEnabled")
+            defaults.set(floatingApps.bundleIDs, forKey: "floatingAppIDs")
+        }
+    }
     /// "Shift-click a Dock icon to add its app to the stage".
     @Published var dockShiftClickAdds: Bool { didSet { defaults.set(dockShiftClickAdds, forKey: "dockShiftClickAdds") } }
     /// "Click wallpaper to show desktop".
@@ -60,6 +67,9 @@ final class Settings: ObservableObject {
         windowGrouping = defaults.string(forKey: "appWindowGrouping").flatMap(WindowGrouping.init(rawValue:)) ?? .allAtOnce
         dockClickMinimizes = defaults.bool(forKey: "dockClickMinimizes")
         dockShiftClickAdds = defaults.object(forKey: "dockShiftClickAdds") as? Bool ?? true
+        floatingApps = FloatingApps(
+            enabled: defaults.object(forKey: "floatingAppsEnabled") as? Bool ?? FloatingApps.defaults.enabled,
+            bundleIDs: defaults.stringArray(forKey: "floatingAppIDs") ?? FloatingApps.defaults.bundleIDs)
         clickWallpaperShowsDesktop = defaults.object(forKey: "clickWallpaperShowsDesktop") as? Bool ?? true
         onboarded = defaults.bool(forKey: "onboarded")
         turnedOffAppleStageManager = defaults.bool(forKey: "turnedOffAppleStageManager")
@@ -91,6 +101,7 @@ final class Settings: ObservableObject {
         windowGrouping = .allAtOnce
         dockClickMinimizes = false
         dockShiftClickAdds = true
+        floatingApps = .defaults
         clickWallpaperShowsDesktop = true
     }
 }

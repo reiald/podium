@@ -88,6 +88,22 @@ struct SettingsView: View {
                     }
                 }
             }
+            Section("Floating Apps") {
+                Toggle(isOn: $settings.floatingApps.enabled) {
+                    Text("Open these apps over the stage")
+                    Text("Their windows don't get a stage, so the apps you're using stay put. Applies to windows opened from now on.")
+                }
+                ForEach(settings.floatingApps.bundleIDs, id: \.self) { id in
+                    LabeledContent {
+                        Button("Remove") { settings.floatingApps.remove(id) }
+                    } label: {
+                        Text(Self.appName(id))
+                    }
+                }
+                .disabled(!settings.floatingApps.enabled)
+                Button("Add App…") { addFloatingApp() }
+                    .disabled(!settings.floatingApps.enabled)
+            }
             HStack {
                 Spacer()
                 Button("Reset to Defaults") { settings.resetToDefaults() }
@@ -96,6 +112,25 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 420)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+extension SettingsView {
+    /// The app's name for a bundle ID, or the ID itself when it isn't installed.
+    static func appName(_ bundleID: String) -> String {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID)
+            .map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? bundleID
+    }
+
+    func addFloatingApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowsMultipleSelection = true
+        guard panel.runModal() == .OK else { return }
+        for url in panel.urls {
+            if let id = Bundle(url: url)?.bundleIdentifier { settings.floatingApps.add(id) }
+        }
     }
 }
 

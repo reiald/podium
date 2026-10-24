@@ -40,6 +40,8 @@ final class Coordinator {
     var dockClickMinimizes = false {
         didSet { publishMinimizeState() }
     }
+    /// Apps whose new windows open over the stage, unmanaged (Settings).
+    var floatingApps = FloatingApps.defaults
     /// A Shift-click on a Dock icon adds that app's strip item to the stage instead of swapping.
     var dockShiftClickAdds = true {
         didSet { publishMinimizeState() }
@@ -906,7 +908,8 @@ final class Coordinator {
     }
 
     private func shouldManage(_ w: WindowRef) -> Bool {
-        w.pid != getpid() && backend.canManage(w)
+        w.pid != getpid() && !floatingApps.floats(NSRunningApplication(processIdentifier: w.pid)?.bundleIdentifier)
+            && backend.canManage(w)
     }
 
     private func isOnBoard(_ w: WindowRef) -> Bool {

@@ -92,6 +92,23 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     #expect(b.activeStage == nil)
 }
 
+// A viewer opened from Finder (qView, Archive Utility) takes the stage; closing its only
+// window brings Finder's stage straight back, not an empty desktop until the app quits.
+@Test func closingTheLastStageWindowBringsBackThePreviousStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(1, 11))
+    b.windowOpened(w(2, 20))                     // the viewer: Finder goes to the strip
+    #expect(b.activeStage?.windows == [w(2, 20)])
+    b.windowClosed(w(2, 20))
+    #expect(Set(b.activeStage?.windows ?? []) == [w(1, 10), w(1, 11)])
+    #expect(b.activeStage?.windows.first == w(1, 11))
+    // Minimizing (or dragging out) the last window still leaves the desktop, as in Apple's.
+    b.windowOpened(w(3, 30))
+    b.minimizeToStrip(w(3, 30))
+    #expect(b.activeStage == nil)
+}
+
 @Test func closingWindowInStripStageKeepsActive() {
     var b = board()
     b.windowOpened(w(1, 10))
@@ -128,10 +145,11 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     var b = board()
     b.windowOpened(w(1, 10))
     b.windowOpened(w(2, 20))
-    b.windowClosed(w(2, 20))   // active deleted -> desktop
+    b.showDesktop()
     #expect(b.activeStageID == nil)
     b.windowOpened(w(3, 30))
-    b.windowClosed(w(3, 30))
+    b.windowClosed(w(3, 30))                   // the previous stage comes back
+    b.showDesktop()
     b.addToActiveStage(w(1, 10))
     #expect(b.activeStage?.windows == [w(1, 10)])
 }
@@ -475,10 +493,10 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     #expect(b.activeStage?.windows.first == w(1, 10))
     b.windowClosed(w(1, 10))
     #expect(b.activeStage?.windows == [w(2, 20)])
-    // None left: the stage stays empty, even with a window in the strip.
+    // None left: the stage used before it comes back.
     b.windowClosed(w(2, 20))
-    #expect(b.activeStageID == nil)
-    #expect(b.stripStages.map(\.windows) == [[w(3, 30)]])
+    #expect(b.activeStage?.windows == [w(3, 30)])
+    #expect(b.stripStages.isEmpty)
 }
 
 @Test func stageIDsStayTheSameAcrossChanges() throws {

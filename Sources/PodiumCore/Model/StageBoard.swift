@@ -144,7 +144,7 @@ public struct StageBoard: Equatable, Sendable {
 
     public mutating func windowClosed(_ w: WindowRef) {
         guard inputs.zOrder.contains(w) else { return }
-        leave([w], leavesUserSets: true) { i in
+        leave([w], leavesUserSets: true, fallsBackToPrevious: true) { i in
             i.zOrder.removeAll { $0 == w }
             i.docked.remove(w)
             i.minimizedToStrip.remove(w)
@@ -370,7 +370,10 @@ public struct StageBoard: Equatable, Sendable {
     /// Applies `change`, which takes `leaving` off the stage. If the stage's front window
     /// leaves, another window of the stage comes to the front, the same app's first; with
     /// none left the stage is empty (R15, R18).
-    private mutating func leave(_ leaving: Set<WindowRef>, leavesUserSets: Bool, _ change: (inout Inputs) -> Void) {
+    /// `fallsBackToPrevious` (a close): a stage left with nothing brings back the most
+    /// recently used window's stage instead of the desktop.
+    private mutating func leave(_ leaving: Set<WindowRef>, leavesUserSets: Bool, fallsBackToPrevious: Bool = false,
+                                _ change: (inout Inputs) -> Void) {
         let stageWindows = assignment.stageWindows
         let front = inputs.proposal.flatMap { stageWindows.contains($0) ? $0 : nil } ?? stageWindows.first
         update { i in
@@ -384,6 +387,10 @@ public struct StageBoard: Equatable, Sendable {
             if let n = next.first(where: { $0.pid == front.pid }) ?? next.first {
                 i.toFront(n)
                 i.proposal = n
+            } else if fallsBackToPrevious, let previous = i.zOrder.first(where: { w in
+                !leaving.contains(w) && !i.docked.contains(w) && !i.minimizedToStrip.contains(w) && !i.hidden.contains(w.pid)
+            }) {
+                i.proposal = previous
             } else {
                 i.proposal = nil
                 i.emptyStage = true
