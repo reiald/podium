@@ -74,6 +74,10 @@ struct SettingsView: View {
                     Text("Click an app's Dock icon to minimize it to the strip")
                     Text("Turn off the same option in other apps, such as Vorssaint.")
                 }
+                Toggle(isOn: $settings.dockShiftClickAdds) {
+                    Text("Shift-click a Dock icon to add its app to the stage")
+                    Text("A plain click still switches to the app.")
+                }
                 Toggle("Click wallpaper to show desktop", isOn: $settings.clickWallpaperShowsDesktop)
                 if settings.clickWallpaperShowsDesktop, settings.macOSRevealsDesktopOnClick {
                     LabeledContent {

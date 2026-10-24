@@ -81,6 +81,33 @@ public func decideDockClick(_ c: DockClick, enabled: Bool, tapHealthy: Bool,
     return .passThrough
 }
 
+/// A running app with windows in the strip, as the Dock tap sees it.
+public struct StripApp: Equatable, Sendable {
+    public var pid: Int32
+    public var url: URL?
+    public var bundleID: String?
+
+    public init(pid: Int32, url: URL?, bundleID: String?) {
+        self.pid = pid
+        self.url = url
+        self.bundleID = bundleID
+    }
+}
+
+/// A Shift-click on a Dock icon of an app whose windows are in the strip, while a stage is
+/// showing: that app joins the stage instead of swapping it (`StageBoard.combineIntoActive`).
+/// Returns the app's pid, or nil to let the Dock have the click (a plain click swaps, as
+/// macOS activating the app always does).
+public func dockShiftClickApp(_ c: DockClick, enabled: Bool, tapHealthy: Bool, stageShowing: Bool,
+                              stripApps: [StripApp], bundleIdentifier: (URL) -> String? = { _ in nil }) -> Int32? {
+    guard enabled, tapHealthy, stageShowing, c.modifiers == .shift,
+          c.role == "AXDockItem", c.subrole == "AXApplicationDockItem",
+          let item = c.itemURL, item.isFileURL else { return nil }
+    if let app = stripApps.first(where: { $0.url.map { sameBundle(item, $0) } ?? false }) { return app.pid }
+    guard let id = bundleIdentifier(item), !id.isEmpty else { return nil }
+    return stripApps.first { $0.bundleID == id }?.pid
+}
+
 /// File URLs naming the same path ("Safari.app/" and "Safari.app" alike, or through symlinks).
 func sameBundle(_ a: URL, _ b: URL) -> Bool {
     guard a.isFileURL, b.isFileURL else { return false }

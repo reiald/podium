@@ -229,3 +229,40 @@ import Foundation
                                 frontmostAppHasWindowOnBoard: true) == .intercept)
     }
 }
+
+@Suite struct DockShiftClickTests {
+    let safari = URL(fileURLWithPath: "/Applications/Safari.app")
+    let notes = URL(fileURLWithPath: "/System/Applications/Notes.app")
+    var apps: [StripApp] { [StripApp(pid: 7, url: notes, bundleID: "com.apple.Notes"),
+                            StripApp(pid: 9, url: safari, bundleID: "com.apple.Safari")] }
+
+    private func click(_ m: ModifierSet, _ url: URL?, subrole: String = "AXApplicationDockItem") -> DockClick {
+        DockClick(modifiers: m, role: "AXDockItem", subrole: subrole, itemURL: url)
+    }
+
+    private func decide(_ c: DockClick, enabled: Bool = true, healthy: Bool = true, stage: Bool = true) -> Int32? {
+        dockShiftClickApp(c, enabled: enabled, tapHealthy: healthy, stageShowing: stage, stripApps: apps)
+    }
+
+    @Test func shiftClickOnAnAppInTheStripAddsIt() {
+        #expect(decide(click(.shift, safari)) == 9)
+        #expect(decide(click(.shift, URL(fileURLWithPath: "/Applications/Safari.app/"))) == 9)
+    }
+
+    @Test func everythingElsePassesToTheDock() {
+        #expect(decide(click([], safari)) == nil)                       // plain click: macOS swaps
+        #expect(decide(click([.shift, .command], safari)) == nil)
+        #expect(decide(click(.shift, URL(fileURLWithPath: "/Applications/Mail.app"))) == nil)  // not in the strip
+        #expect(decide(click(.shift, safari, subrole: "AXFolderDockItem")) == nil)
+        #expect(decide(click(.shift, safari), enabled: false) == nil)
+        #expect(decide(click(.shift, safari), healthy: false) == nil)
+        #expect(decide(click(.shift, safari), stage: false) == nil)     // nothing on stage to join
+    }
+
+    @Test func matchesByBundleIDWhenThePathDiffers() {
+        let moved = URL(fileURLWithPath: "/Users/x/Applications/Safari.app")
+        let pid = dockShiftClickApp(click(.shift, moved), enabled: true, tapHealthy: true, stageShowing: true,
+                                    stripApps: apps, bundleIdentifier: { $0 == moved ? "com.apple.Safari" : nil })
+        #expect(pid == 9)
+    }
+}

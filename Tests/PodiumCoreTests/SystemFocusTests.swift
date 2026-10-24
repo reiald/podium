@@ -57,3 +57,18 @@ private func board() -> StageBoard {
     #expect(c.ignores(w(1, 11), at: 10.3, board: b))
     #expect(!c.ignores(w(1, 11), at: 10 + SystemFocus.quiet, board: b))
 }
+
+// Photoshop closes a small helper window (not on the board) whenever it loses focus; that
+// close must not make Podium ignore the Dock click on another app that caused it.
+@Test func onlyAClosedStageWindowMovesFocus() {
+    let b = board()                                    // A (1,10) on stage, B (2,20) in the strip
+    var helper = SystemFocus()
+    helper.windowClosed(w(1, 99), at: 10, board: b)    // never on the board
+    #expect(!helper.ignores(appActivated: 2, at: 10.1, board: b))
+    var parked = SystemFocus()
+    parked.windowClosed(w(2, 20), at: 10, board: b)    // in the strip: no focus moves
+    #expect(!parked.ignores(appActivated: 2, at: 10.1, board: b))
+    var onStage = SystemFocus()
+    onStage.windowClosed(w(1, 10), at: 10, board: b)   // on stage: macOS focuses another window
+    #expect(onStage.ignores(appActivated: 2, at: 10.1, board: b))
+}

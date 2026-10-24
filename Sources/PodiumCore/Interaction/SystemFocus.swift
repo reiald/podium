@@ -15,6 +15,13 @@ public struct SystemFocus: Sendable {
 
     public mutating func closed(at t: Double) { since = t }
 
+    /// `w` closed; `board` is before the close. Only a window on stage hands focus to another
+    /// window; a strip window or one Podium doesn't manage (an app's helper panel) moves none.
+    public mutating func windowClosed(_ w: WindowRef, at t: Double, board: StageBoard) {
+        guard board.activeStage?.windows.contains(w) == true else { return }
+        closed(at: t)
+    }
+
     /// Podium put a stage on stage the user chose (a strip click, the app view).
     public mutating func stageChosen(at t: Double) { since = t }
 

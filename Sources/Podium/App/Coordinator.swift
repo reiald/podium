@@ -40,6 +40,10 @@ final class Coordinator {
     var dockClickMinimizes = false {
         didSet { publishMinimizeState() }
     }
+    /// A Shift-click on a Dock icon adds that app's strip item to the stage instead of swapping.
+    var dockShiftClickAdds = true {
+        didSet { publishMinimizeState() }
+    }
     /// False: the strip never slides away (auto-hide bypassed).
     var autoHideEnabled = true {
         didSet { presenter?.setAutoHideEnabled(autoHideEnabled) }
@@ -173,6 +177,8 @@ final class Coordinator {
                 Self.openLikeDockClick(pid: pid)
                 if self.isRunning { self.handle(.appActivated(pid)) }
             }
+        } onDockShiftClick: { [weak self] pid in
+            guard let self, self.addAppToStage(pid: pid) else { return Self.openLikeDockClick(pid: pid) }
         }
         self.interceptor = interceptor
         interceptor.start()
@@ -470,6 +476,17 @@ final class Coordinator {
             .filter { !board.isHidden(pid: $0) }
     }
 
+    /// Dock Shift-click: the app's strip item joins the stage, as a Shift-click on the item
+    /// would. False (nothing changed) if it no longer applies; the caller opens the app.
+    private func addAppToStage(pid: pid_t) -> Bool {
+        guard isRunning, !applying, board.activeStage != nil else { return false }
+        let items = board.stripStages.filter { $0.windows.contains { $0.pid == pid } }
+        guard let item = items.first(where: { $0.windows.allSatisfy { $0.pid == pid } }) ?? items.first else { return false }
+        podiumLog("Podium: Dock Shift-click adds pid %d to the stage", pid)
+        combineIntoActive(stageID: item.id, dragged: nil)
+        return true
+    }
+
     /// What a Dock click on a running app does: activates it and sends it a reopen event.
     private static func openLikeDockClick(pid: pid_t) {
         guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
@@ -536,7 +553,14 @@ final class Coordinator {
                                  inStrip: isRunning ? appsInStrip() : [],
                                  dockClickEnabled: isRunning && dockClickMinimizes,
                                  frontmostPid: front?.processIdentifier, frontmostURL: front?.bundleURL,
-                                 frontmostBundleID: front?.bundleIdentifier))
+                                 frontmostBundleID: front?.bundleIdentifier,
+                                 dockShiftAddEnabled: isRunning && dockShiftClickAdds,
+                                 stripApps: isRunning ? appsInStrip().compactMap { pid in
+                                     NSRunningApplication(processIdentifier: pid).map {
+                                         StripApp(pid: pid, url: $0.bundleURL, bundleID: $0.bundleIdentifier)
+                                     }
+                                 } : [],
+                                 stageShowing: isRunning && board.activeStage != nil))
     }
 
     /// Fallback for minimizes the interceptor didn't see (Window menu, custom title bars, a
@@ -665,7 +689,7 @@ final class Coordinator {
                 return
             case let .closed(forgetLedger):
                 fullScreen.remove(w)
-                systemFocus.closed(at: CACurrentMediaTime())
+                systemFocus.windowClosed(w, at: CACurrentMediaTime(), board: board)
                 board.windowClosed(w)
                 runner?.forget(w)
                 // A failed list query (empty answer) keeps the ledger entry.

@@ -19,6 +19,8 @@ final class Settings: ObservableObject {
     }
     /// "Click an app's Dock icon to minimize it to the strip".
     @Published var dockClickMinimizes: Bool { didSet { defaults.set(dockClickMinimizes, forKey: "dockClickMinimizes") } }
+    /// "Shift-click a Dock icon to add its app to the stage".
+    @Published var dockShiftClickAdds: Bool { didSet { defaults.set(dockShiftClickAdds, forKey: "dockShiftClickAdds") } }
     /// "Click wallpaper to show desktop".
     @Published var clickWallpaperShowsDesktop: Bool {
         didSet { defaults.set(clickWallpaperShowsDesktop, forKey: "clickWallpaperShowsDesktop") }
@@ -57,6 +59,7 @@ final class Settings: ObservableObject {
         autoHide = defaults.object(forKey: "autoHide") as? Bool ?? true
         windowGrouping = defaults.string(forKey: "appWindowGrouping").flatMap(WindowGrouping.init(rawValue:)) ?? .allAtOnce
         dockClickMinimizes = defaults.bool(forKey: "dockClickMinimizes")
+        dockShiftClickAdds = defaults.object(forKey: "dockShiftClickAdds") as? Bool ?? true
         clickWallpaperShowsDesktop = defaults.object(forKey: "clickWallpaperShowsDesktop") as? Bool ?? true
         onboarded = defaults.bool(forKey: "onboarded")
         turnedOffAppleStageManager = defaults.bool(forKey: "turnedOffAppleStageManager")
@@ -87,6 +90,7 @@ final class Settings: ObservableObject {
         autoHide = true
         windowGrouping = .allAtOnce
         dockClickMinimizes = false
+        dockShiftClickAdds = true
         clickWallpaperShowsDesktop = true
     }
 }

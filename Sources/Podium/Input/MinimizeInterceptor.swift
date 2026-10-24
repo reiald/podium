@@ -33,10 +33,20 @@ final class MinimizeInterceptor: @unchecked Sendable {
         var frontmostPid: pid_t?
         var frontmostURL: URL?
         var frontmostBundleID: String?
+        /// "Shift-click a Dock icon to add its app to the stage".
+        var dockShiftAddEnabled = false
+        /// Apps with windows in the strip, for a Dock Shift-click.
+        var stripApps: [StripApp] = []
+        /// A stage is on screen (not the desktop), so there is one to join.
+        var stageShowing = false
+
+        /// The Dock's frame is needed (either Dock setting on).
+        var watchesDock: Bool { dockClickEnabled || dockShiftAddEnabled }
     }
 
     private let onIntercept: @MainActor (WindowRef) -> Void
     private let onDockClick: @MainActor (pid_t) -> Void
+    private let onDockShiftClick: @MainActor (pid_t) -> Void
     private let state = OSAllocatedUnfairLock(initialState: State())
     /// Where a click may land on a Dock icon (`dockClickGate`); refreshed on main by
     /// `refreshDockFrame`, read by the tap. Nil: unknown, so no Dock click is intercepted.
@@ -67,6 +77,8 @@ final class MinimizeInterceptor: @unchecked Sendable {
     private var dockPress = DockPress()
     /// That press's app and mouse-down (re-posted if it turns out not to be a click).
     private var dockPressPid: pid_t?
+    /// The press was a Shift-click (join the stage), not a plain click (minimize/restore).
+    private var dockPressAdds = false
     private var dockPressDown: CGEvent?
     /// Replays the press once it is held for `DockPress.holdTime` (the Dock's icon menu).
     private var dockHoldTimer: CFRunLoopTimer?
@@ -82,9 +94,11 @@ final class MinimizeInterceptor: @unchecked Sendable {
     /// A callback this fast marks an unhealthy tap healthy again.
     static let healthyCallbackTime: CFTimeInterval = 0.005
 
-    init(onIntercept: @escaping @MainActor (WindowRef) -> Void, onDockClick: @escaping @MainActor (pid_t) -> Void) {
+    init(onIntercept: @escaping @MainActor (WindowRef) -> Void, onDockClick: @escaping @MainActor (pid_t) -> Void,
+         onDockShiftClick: @escaping @MainActor (pid_t) -> Void) {
         self.onIntercept = onIntercept
         self.onDockClick = onDockClick
+        self.onDockShiftClick = onDockShiftClick
     }
 
     /// Publishes what the tap may intercept. Call on every board or setting change.
@@ -92,16 +106,16 @@ final class MinimizeInterceptor: @unchecked Sendable {
     func update(_ new: State) {
         let wasDockClick = state.withLock { s -> Bool in
             defer { s = new }
-            return s.dockClickEnabled
+            return s.watchesDock
         }
-        if new.dockClickEnabled, !wasDockClick { refreshDockFrame() }
+        if new.watchesDock, !wasDockClick { refreshDockFrame() }
     }
 
     /// Re-reads where the Dock's icons are (off the main thread; one AX read of the Dock),
     /// only while the Dock-click setting is on. Call on screen changes too.
     @MainActor
     func refreshDockFrame() {
-        guard tapRunLoop != nil, state.withLock({ $0.dockClickEnabled }), !dockFrameReading,
+        guard tapRunLoop != nil, state.withLock({ $0.watchesDock }), !dockFrameReading,
               let dock = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.dock").first
         else { return }
         dockFrameReading = true
@@ -244,6 +258,8 @@ final class MinimizeInterceptor: @unchecked Sendable {
         case intercept(WindowRef)
         /// A press on the frontmost app's Dock icon began (swallowed, decided later).
         case dockPress(pid_t)
+        /// A Shift-press on the Dock icon of an app in the strip (joins the stage).
+        case dockShiftPress(pid_t)
     }
 
     /// True to swallow the event.
@@ -289,7 +305,10 @@ final class MinimizeInterceptor: @unchecked Sendable {
                 DispatchQueue.main.async { MainActor.assumeIsolated { onIntercept(w) } }
                 return true
             case let .dockPress(pid):
-                beginDockPress(event, pid: pid)
+                beginDockPress(event, pid: pid, adds: false)
+                return true
+            case let .dockShiftPress(pid):
+                beginDockPress(event, pid: pid, adds: true)
                 return true
             }
         default:
@@ -347,6 +366,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
     /// press on the frontmost app's own icon starts a `DockPress`; any other item passes.
     private func dockClick(_ event: CGEvent, _ s: State, modifiers: ModifierSet, tapHealthy: Bool) -> DockHit {
         let p = event.location
+        if modifiers == .shift { return dockShiftClick(event, s, tapHealthy: tapHealthy) }
         let onBoard = s.frontmostPid.map { pid in s.managed.contains { $0.pid == pid } || s.inStrip.contains(pid) } ?? false
         guard s.dockClickEnabled, modifiers.isEmpty, tapHealthy, let pid = s.frontmostPid,
               let front = s.frontmostURL, let systemWide, onBoard,
@@ -368,12 +388,41 @@ final class MinimizeInterceptor: @unchecked Sendable {
         return .decided(.dockPress(pid))
     }
 
+    /// A Shift-press on the Dock icon of an app with windows in the strip
+    /// (`dockShiftClickApp`): swallowed, and decided like any Dock press when it ends.
+    private func dockShiftClick(_ event: CGEvent, _ s: State, tapHealthy: Bool) -> DockHit {
+        let p = event.location
+        guard dockGate.withLock({ $0?.contains(p) }) == true else { return .notInDock }
+        guard s.dockShiftAddEnabled, s.stageShowing, tapHealthy, !s.stripApps.isEmpty, let systemWide else {
+            podiumLog("Podium: Dock Shift-press passes (setting %d, stage %d, healthy %d, strip apps %d)",
+                      s.dockShiftAddEnabled ? 1 : 0, s.stageShowing ? 1 : 0, tapHealthy ? 1 : 0, s.stripApps.count)
+            return .notInDock
+        }
+        var hit: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(p.x), Float(p.y), &hit) == .success,
+              let item = hit else { return .decided(.pass) }
+        AXUIElementSetMessagingTimeout(item, Self.hitTestTimeout)
+        let role = AX.string(kAXRoleAttribute, of: item)
+        guard role == "AXDockItem" else { return .notDockItem(item) }
+        let click = DockClick(modifiers: .shift, role: role, subrole: AX.string(kAXSubroleAttribute, of: item),
+                              itemURL: Self.url(kAXURLAttribute, of: item))
+        guard let pid = dockShiftClickApp(click, enabled: s.dockShiftAddEnabled, tapHealthy: tapHealthy,
+                                          stageShowing: s.stageShowing, stripApps: s.stripApps,
+                                          bundleIdentifier: { Bundle(url: $0)?.bundleIdentifier })
+        else {
+            podiumLog("Podium: Dock Shift-press on %@ (%@) is no app in the strip", click.itemURL?.path ?? "?", click.subrole ?? "?")
+            return .decided(.pass)
+        }
+        return .decided(.dockShiftPress(pid))
+    }
+
     // MARK: - Dock press
 
     /// The mouse-down was swallowed: keep it, and replay it if the press is held.
-    private func beginDockPress(_ down: CGEvent, pid: pid_t) {
+    private func beginDockPress(_ down: CGEvent, pid: pid_t, adds: Bool) {
         dockPressDown = down.copy()
         dockPressPid = pid
+        dockPressAdds = adds
         dockPress.began(at: down.location, time: CACurrentMediaTime())
         let timer = CFRunLoopTimerCreateWithHandler(kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + DockPress.holdTime,
                                                     0, 0, 0) { [weak self] _ in
@@ -393,10 +442,11 @@ final class MinimizeInterceptor: @unchecked Sendable {
             return true
         case .act:
             let pid = dockPressPid
+            let adds = dockPressAdds
             endDockPress()
             if let pid {
-                let onDockClick = self.onDockClick
-                DispatchQueue.main.async { MainActor.assumeIsolated { onDockClick(pid) } }
+                let action = adds ? self.onDockShiftClick : self.onDockClick
+                DispatchQueue.main.async { MainActor.assumeIsolated { action(pid) } }
             }
             return true
         case .replay:
@@ -418,6 +468,7 @@ final class MinimizeInterceptor: @unchecked Sendable {
         dockHoldTimer = nil
         dockPressDown = nil
         dockPressPid = nil
+        dockPressAdds = false
     }
 
     /// Intercepts Cmd-M (by the character typed, so any keyboard layout) on a managed
