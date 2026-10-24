@@ -6,6 +6,8 @@ public struct AutoHide: Sendable {
     public private(set) var isHidden = false
     private let tuning: Tuning
     private var outsideSince: TimeInterval?
+    /// Shown, whatever covers it, until then (`holdShown`).
+    private var heldUntil: TimeInterval?
 
     public init(tuning: Tuning) {
         self.tuning = tuning
@@ -14,6 +16,11 @@ public struct AutoHide: Sendable {
     public mutating func update(overlapFraction: Double, pointer: CGPoint, band: CGRect,
                                 screen: CGRect, side: StripSide, now: TimeInterval) {
         let inBand = band.contains(pointer)
+
+        if let held = heldUntil {
+            guard now >= held else { return }
+            heldUntil = nil
+        }
 
         if isHidden {
             let atEdge = side == .right
@@ -32,5 +39,13 @@ public struct AutoHide: Sendable {
         let since = outsideSince ?? now
         outsideSince = since
         if now - since >= tuning.autoHideDelay { isHidden = true }
+    }
+
+    /// A card is flying into the strip: it shows, and stays shown until `until`; after that
+    /// it hides again `autoHideDelay` after windows cover it.
+    public mutating func holdShown(until: TimeInterval) {
+        isHidden = false
+        outsideSince = nil
+        heldUntil = max(heldUntil ?? until, until)
     }
 }

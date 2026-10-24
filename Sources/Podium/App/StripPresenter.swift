@@ -70,6 +70,8 @@ final class StripPresenter {
     private var releasedSince: TimeInterval?
     /// A mouse-up normally arrives well within this; past it, it was lost.
     private static let lostMouseUpDelay: TimeInterval = 0.25
+    /// How long the strip stays shown for a card flying in: the snapshot, the flight and a beat to see it land.
+    private static let landingHold: TimeInterval = 1.2
     /// Active-stage window frames at the last mouse-down (drag-out detection).
     private var framesAtMouseDown: [WindowRef: CGRect] = [:]
     private var mouseDownAt: CGPoint = .zero
@@ -112,6 +114,7 @@ final class StripPresenter {
         // The panel only sees the pointer while it takes the mouse; the pointer's real
         // position (read in `trackPointer`) drives hover either way, so no exit flicker.
         panel.onHover = { [weak self] _ in self?.trackPointer() }
+        runner.onLeaving = { [weak self] in self?.showForLanding() }
     }
 
     /// Shows the (clear) panel right away: a new window's first composite costs a frame.
@@ -164,7 +167,7 @@ final class StripPresenter {
     }
 
     private func slots() -> [StripSlot] {
-        stripSlots(for: runner.stripStages(), in: layout.screen, side: layout.side, tuning: layout.tuning)
+        runner.slots(for: runner.stripStages())
     }
 
     private func updateHover() {
@@ -203,6 +206,17 @@ final class StripPresenter {
         autoHideEnabled = enabled
         guard !enabled else { return }
         autoHide = AutoHide(tuning: runner.layout.tuning)
+        guard runner.isHidden else { return }
+        runner.setHidden(false)
+        updateMouseTaking()
+        updateHover()
+    }
+
+    /// A hidden strip slides in while cards fly into it, so a minimized or switched-away
+    /// window lands somewhere visible, then hides again once windows cover it.
+    private func showForLanding() {
+        guard autoHideEnabled else { return }
+        autoHide.holdShown(until: ProcessInfo.processInfo.systemUptime + Self.landingHold)
         guard runner.isHidden else { return }
         runner.setHidden(false)
         updateMouseTaking()

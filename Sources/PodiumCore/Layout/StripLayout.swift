@@ -36,16 +36,28 @@ public func stageArea(in screen: CGRect, side: StripSide, tuning: Tuning) -> CGR
 }
 
 /// `stages` must already be in strip order; only the first `maxRowCount` get slots.
-public func stripSlots(for stages: [Stage], in screen: CGRect, side: StripSide, tuning: Tuning) -> [StripSlot] {
+///
+/// As in Apple's strip, every item is its front window (`windowSizes`, by stage id) scaled by
+/// one shared factor, so a full-width window is `itemMaxSize.width` wide and smaller windows
+/// stay smaller; an item never exceeds `itemMaxSize`. Slots hug the screen edge, stack
+/// `rowSpacing` apart, and the stack is centered. A stage without a known size gets the box.
+public func stripSlots(for stages: [Stage], in screen: CGRect, side: StripSide, tuning: Tuning,
+                       windowSizes: [UUID: CGSize] = [:]) -> [StripSlot] {
     let shown = stages.prefix(tuning.maxRowCount)
     guard !shown.isEmpty else { return [] }
-    let size = tuning.itemMaxSize
-    let total = CGFloat(shown.count) * size.height + CGFloat(shown.count - 1) * tuning.rowSpacing
-    let top = screen.midY - total / 2
-    let x = screen.maxX - tuning.stripEdgeInset - size.width
-    return shown.enumerated().map { index, stage in
-        let y = top + CGFloat(index) * (size.height + tuning.rowSpacing)
+    let box = tuning.itemMaxSize
+    let scale = screen.width > 0 ? box.width / screen.width : 0
+    let sizes = shown.map { stage -> CGSize in
+        guard let window = windowSizes[stage.id], window.width > 0, window.height > 0, scale > 0 else { return box }
+        let fit = min(scale, box.width / window.width, box.height / window.height)
+        return CGSize(width: window.width * fit, height: window.height * fit)
+    }
+    let total = sizes.reduce(0) { $0 + $1.height } + CGFloat(shown.count - 1) * tuning.rowSpacing
+    var y = screen.midY - total / 2
+    return zip(shown, sizes).map { stage, size in
+        let x = screen.maxX - tuning.stripEdgeInset - size.width
         let frame = oriented(CGRect(origin: CGPoint(x: x, y: y), size: size), in: screen, side: side)
+        y += size.height + tuning.rowSpacing
         return StripSlot(stageID: stage.id, frame: frame, tiltRadians: xSign(side) * tuning.tiltRadians)
     }
 }

@@ -31,8 +31,8 @@ public struct Tuning: Codable, Equatable, Sendable {
 
     public static let initial = Tuning(
         stripEdgeInset: 16,
-        itemMaxSize: CGSize(width: 170, height: 160),
-        rowSpacing: 32,
+        itemMaxSize: CGSize(width: 290, height: 160),
+        rowSpacing: 30,
         maxRowCount: 6,
         tiltRadians: 0.30,
         perspectiveDistance: 900,

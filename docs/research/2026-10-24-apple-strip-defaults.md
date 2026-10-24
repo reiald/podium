@@ -13,8 +13,6 @@ Source: macOS 27.2 (Darwin 27.2.0), `WindowManager.framework`, extracted from th
 | Apple setting | Apple | Podium `Tuning` | Podium before |
 |---|---|---|---|
 | defaultPosition spring | response 0.38, damping 1.0 | `transitionSpring` | 0.32, 0.9 |
-| ItemWidth × MaximumItemHeight | 170 × 160 | `itemMaxSize` | 160 × 110 |
-| InterItemVerticalSpacing | 32 | `rowSpacing` | 22 |
 | LeftStripEdgeHorizontalInset | 16 | `stripEdgeInset` | 16 |
 | LeftStripMaximumRowCount | 6 | `maxRowCount` | 6 |
 | LeftStripPileMaximumWindowCount | 3 | `pileMaxWindows` | 3 |
@@ -32,6 +30,22 @@ Not adopted:
   probably not the strip's resting tilt (Inferred). `tiltRadians` and `perspectiveDistance` stay.
 - Pile spacing (`LeftStripPileInterItemHorizontalSpacing` 16, `LeftStripPileVerticalSpacing` 30) and
   app icon offsets (left -10, bottom 10) have no matching Podium field yet.
+
+## Strip layout (measured)
+
+Screenshot of Apple's strip, macOS 27.2, 3008 × 1692 pt display, six items:
+
+- Items are flat at rest, 16 pt from the screen edge (`LeftStripEdgeHorizontalInset`).
+- Gaps between items: 30, 29, 30, 30 pt: `LeftStripPileVerticalSpacing` (30), not
+  `InterItemVerticalSpacing` (32, which the agent never reads). Podium `rowSpacing` = 30.
+- Every window is scaled by one shared factor (about 0.096 here: a near full-width window is
+  290 × 150, System Settings 71 × 114), so small windows stay small. The agent's layout reads
+  `MaximumItemHeight` 160, `PreferredMinimumItemHeight` 96 and `AbsoluteMinimumItemHeight` 20
+  (`FUN_1002c125c`); 160 / 1662 pt matches the factor (Inferred).
+- The stack is centered vertically.
+
+Podium: `stripSlots(windowSizes:)` scales every window by `itemMaxSize.width / screen.width`,
+capped to `itemMaxSize`; default `itemMaxSize` 290 × 160 (290 = Apple's widest item here).
 
 ## All decoded defaults
 

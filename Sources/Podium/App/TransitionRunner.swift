@@ -64,6 +64,8 @@ final class TransitionRunner {
 
     /// Called with every window a park/unpark batch touched, right after the batch ends.
     var onBatchEnd: ([WindowRef]) -> Void = { _ in }
+    /// Windows are about to fly from the stage into the strip.
+    var onLeaving: () -> Void = {}
 
     private(set) var layout: Layout
     /// Off: strip cards show no app-icon badge (Settings window).
@@ -418,6 +420,7 @@ final class TransitionRunner {
         }
         if !ready.isEmpty { parkAfterCommit(ready) }
         guard !fresh.isEmpty else { return }
+        onLeaving()
 
         leaveToken += 1
         let token = leaveToken
@@ -443,9 +446,11 @@ final class TransitionRunner {
             guard !mover.isParked(w), !backend.isMinimized(w), let frame = backend.frame(of: w) else { continue }
             guard let image = images[w], isOnOverlay(frame) else {
                 // No snapshot (or not on the strip's display): Task 9's instant move, no card.
+                logger.log("leave of \(w.windowID, privacy: .public): instant (snapshot \(images[w] != nil, privacy: .public), on overlay \(self.isOnOverlay(frame), privacy: .public))")
                 instant.append(w)
                 continue
             }
+            logger.log("leave of \(w.windowID, privacy: .public): card")
             let card = makeCard(image: image, pointWidth: frame.width)
             card.apply(framePose(frame, card: card))
             setZ(card, Self.transitionZ)
@@ -551,7 +556,7 @@ final class TransitionRunner {
         }
 
         let stages = stripStages(of: b)
-        let slots = stripSlots(for: stages, in: layout.screen, side: layout.side, tuning: layout.tuning)
+        let slots = slots(for: stages)
         if onlyStages == nil { lastPlacement = [:] }
         for stage in stages where onlyStages?.contains(stage.id) ?? true {
             let slot = slots.first { $0.stageID == stage.id }
@@ -571,6 +576,7 @@ final class TransitionRunner {
                 animator.drive(t.card, to: stripPose(card: t.card, slot: slot, stage: stage, index: index),
                                spring: spring)
                 if !visible {
+                    logger.log("card of \(w.windowID, privacy: .public) tucks away (index \(index, privacy: .public), slot \(slot != nil, privacy: .public))")
                     // Fades out while tucking away, then goes.
                     let generation = t.generation
                     animator.onSettled(t.card) { [weak self] in
@@ -642,8 +648,7 @@ final class TransitionRunner {
             guard let image, self.tracks[w] == nil, self.mover.isParked(w), self.isVisibleInStrip(w),
                   let stage = self.stripStages().first(where: { $0.windows.contains(w) }) else { return }
             let card = self.makeCard(image: image, pointWidth: self.originalFrame(of: w)?.width)
-            let slots = stripSlots(for: self.stripStages(), in: self.layout.screen,
-                                   side: self.layout.side, tuning: self.layout.tuning)
+            let slots = self.slots(for: self.stripStages())
             // In the app view, new cards fan out from the clicked item.
             let slot = self.appView?.anchor ?? slots.first { $0.stageID == stage.id }
             var start = self.stripPose(card: card, slot: slot, stage: stage,
@@ -803,6 +808,19 @@ final class TransitionRunner {
 
     private func isHidden(_ pid: pid_t) -> Bool {
         board().isHidden(pid: pid) || backend.isAppHidden(pid)
+    }
+
+    /// The strip's slots, each its item's front window at the strip's one shared scale (as in
+    /// Apple's strip).
+    func slots(for stages: [Stage]) -> [StripSlot] {
+        var sizes: [UUID: CGSize] = [:]
+        let frames = Dictionary(ledger.entries().map { ($0.window, $0.originalFrame) }, uniquingKeysWith: { a, _ in a })
+        for stage in stages {
+            guard let front = stage.windows.first else { continue }
+            if let size = frames[front]?.size ?? tracks[front].map({ $0.card.size }) { sizes[stage.id] = size }
+        }
+        return stripSlots(for: stages, in: layout.screen, side: layout.side, tuning: layout.tuning,
+                          windowSizes: sizes)
     }
 
     private func originalFrame(of w: WindowRef) -> CGRect? {

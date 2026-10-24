@@ -409,6 +409,7 @@ final class Coordinator {
             podiumLog("Podium: minimize to strip of %u (pid %d) no longer applies; using the Dock", w.windowID, w.pid)
             return false
         }
+        podiumLog("Podium: minimize to strip of %u (pid %d)", w.windowID, w.pid)
         let old = board
         board.minimizeToStrip(w)
         apply(from: old)

@@ -10,7 +10,7 @@ public struct StripCustomization: Equatable, Codable, Sendable {
     public var showAppIcons: Bool
     public var appIconSize: CGFloat
 
-    public static let thumbnailWidthRange: ClosedRange<CGFloat> = 100...260
+    public static let thumbnailWidthRange: ClosedRange<CGFloat> = 100...320
     public static let tiltDegreesRange: ClosedRange<CGFloat> = 0...30
     public static let appIconSizeRange: ClosedRange<CGFloat> = 16...48
 

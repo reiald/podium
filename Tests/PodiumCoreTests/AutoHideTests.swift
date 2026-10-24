@@ -80,6 +80,18 @@ import Testing
         #expect(h.isHidden)
     }
 
+    @Test func holdShownRevealsAndKeepsTheStripUntilItEnds() {
+        var h = hidden(side: .right)
+        h.holdShown(until: 11)
+        #expect(!h.isHidden)
+        h.update(overlapFraction: 0.9, pointer: outside, band: band, screen: screen, side: .right, now: 10.9)
+        #expect(!h.isHidden)
+        h.update(overlapFraction: 0.9, pointer: outside, band: band, screen: screen, side: .right, now: 11)
+        #expect(!h.isHidden)
+        h.update(overlapFraction: 0.9, pointer: outside, band: band, screen: screen, side: .right, now: 11 + tuning.autoHideDelay + 0.01)
+        #expect(h.isHidden)
+    }
+
     private func hidden(side: StripSide, band b: CGRect? = nil) -> AutoHide {
         var h = AutoHide(tuning: tuning)
         let bb = b ?? band
