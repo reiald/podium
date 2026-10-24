@@ -334,8 +334,12 @@ final class StripPresenter {
             onWallpaperPressEnded(click ? p : nil)
         }
         guard !framesAtMouseDown.isEmpty, !runner.isHidden else { return }
+        // Option-drag is macOS tiling's preview; a release at the screen edge is edge tiling.
+        guard !event.modifierFlags.contains(.option) else { return }
+        let drop = stripDropBand(in: layout.screen, side: layout.side, tuning: layout.tuning)
         guard let (w, before) = titleBarDragged(before: framesAtMouseDown, after: activeStageFrames(),
-                                                pressedAt: mouseDownAt, releasedAt: p, band: band) else { return }
+                                                pressedAt: mouseDownAt, releasedAt: p, band: drop) else { return }
+        logger.log("title bar of \(w.windowID, privacy: .public) released at \(p.x, privacy: .public),\(p.y, privacy: .public) in the drop band")
         onDragOut(w, before)
     }
 

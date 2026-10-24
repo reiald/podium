@@ -123,3 +123,19 @@ private func stages(_ n: Int) -> [Stage] {
     #expect(abs(slots[1].frame.width - 400 * tall) < 0.001 && abs(slots[1].frame.height - 600 * tall) < 0.001)
     #expect(!t.uniformItemSize)                                   // Apple's shared scale by default
 }
+
+// A window dragged to the screen edge is macOS tiling (Fill & Arrange), not a drop into the
+// strip: only the band inside the edge margin, where the thumbnails are, takes drops.
+@Test func dropBandLeavesOutTheScreenEdge() {
+    for side in StripSide.allCases {
+        let band = stripBand(in: screen, side: side, tuning: t)
+        let drop = stripDropBand(in: screen, side: side, tuning: t)
+        #expect(band.contains(drop))
+        #expect(drop.width == band.width - t.stripEdgeInset)
+        let edge = side == .right ? CGPoint(x: screen.maxX - 1, y: screen.midY) : CGPoint(x: screen.minX, y: screen.midY)
+        #expect(band.contains(edge) && !drop.contains(edge))
+        let overItems = side == .right ? CGPoint(x: screen.maxX - t.stripEdgeInset - 10, y: screen.midY)
+                                       : CGPoint(x: screen.minX + t.stripEdgeInset + 10, y: screen.midY)
+        #expect(drop.contains(overItems))
+    }
+}

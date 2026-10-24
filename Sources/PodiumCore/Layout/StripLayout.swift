@@ -29,6 +29,15 @@ public func stripBand(in screen: CGRect, side: StripSide, tuning: Tuning) -> CGR
     return oriented(rightBand, in: screen, side: side)
 }
 
+/// Where a window dragged by its title bar drops into the strip: the band without its outer
+/// `stripEdgeInset` margin. A drag that ends at the screen edge is macOS tiling the window
+/// (Fill & Arrange), not a drop.
+public func stripDropBand(in screen: CGRect, side: StripSide, tuning: Tuning) -> CGRect {
+    let band = stripBand(in: screen, side: .right, tuning: tuning)
+    let inner = CGRect(x: band.minX, y: band.minY, width: band.width - tuning.stripEdgeInset, height: band.height)
+    return oriented(inner, in: screen, side: side)
+}
+
 public func stageArea(in screen: CGRect, side: StripSide, tuning: Tuning) -> CGRect {
     let w = bandWidth(tuning) + tuning.stageInset
     let rightArea = CGRect(x: screen.minX, y: screen.minY, width: screen.width - w, height: screen.height)

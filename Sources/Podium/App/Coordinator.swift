@@ -329,6 +329,7 @@ final class Coordinator {
     /// over the band.
     func dragOut(_ w: WindowRef, restoreTo: CGRect) {
         guard isRunning, !applying, board.activeStage?.windows.contains(w) == true else { return }
+        podiumLog("Podium: title bar of %u (pid %d) dragged into the strip", w.windowID, w.pid)
         let old = board
         board.minimizeToStrip(w)
         guard board != old else { return }
@@ -635,6 +636,7 @@ final class Coordinator {
     }
 
     private func process(_ e: WindowEvent) {
+        podiumLog("Podium: event %@", String(describing: e))
         let old = board
         // Windows macOS itself took off screen (Dock, hide): they leave the stage unparked.
         var offScreen: [WindowRef] = []
@@ -928,6 +930,9 @@ final class Coordinator {
     private func apply(from old: StageBoard, alreadyOffScreen: Set<WindowRef> = []) {
         guard board != old else { return }
         var plan = transitionPlan(from: old, to: board)
+        func ids(_ ws: [WindowRef]) -> String { ws.map { String($0.windowID) }.joined(separator: ",") }
+        podiumLog("Podium: stage [%@] leaving [%@] entering [%@]", ids(board.activeStage?.windows ?? []),
+                  ids(plan.leaving), ids(plan.entering))
         plan.leaving.removeAll { alreadyOffScreen.contains($0) || isHidden($0.pid) }
         plan.entering.removeAll { isHidden($0.pid) }
         // A parked window can join the active stage without having been in the strip (it
