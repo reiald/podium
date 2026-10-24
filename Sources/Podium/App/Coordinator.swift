@@ -294,8 +294,10 @@ final class Coordinator {
         guard isRunning, !applying else { return }
         let old = board
         board.combineIntoActive(stageID: stageID, dragged: dragged)
+        guard board != old else { return }
+        systemFocus.stageChosen(at: CACurrentMediaTime())
         apply(from: old)
-        if old.activeStageID == nil { activateFrontApp() }
+        activateFrontApp()
     }
 
     /// App view click: exactly `w` comes on stage (`StageBoard.show`).
@@ -314,8 +316,10 @@ final class Coordinator {
         guard isRunning, !applying, isOnBoard(w) else { return }
         let old = board
         board.addToActiveStage(w)
+        guard board != old else { return }
+        systemFocus.stageChosen(at: CACurrentMediaTime())
         apply(from: old)
-        if old.activeStageID == nil { activateFrontApp() }
+        activateFrontApp()
     }
 
     /// A stage window's title bar dragged into the strip band: as in Stage Manager, the

@@ -149,6 +149,16 @@ private func board() -> StageBoard { StageBoard(displayID: 1) }
     #expect(b == combined)
 }
 
+@Test func droppedItemComesToFrontOfStage() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    let first = b.activeStageID!
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))
+    b.combineIntoActive(stageID: first, dragged: w(1, 10))
+    #expect(b.activeStage?.windows.first == w(1, 10))
+}
+
 // R15 and the design: a drag out of the stage minimizes the window into its app's strip item.
 @Test func dragOutMinimizesWindowIntoItsAppsStripItem() {
     var b = board()
