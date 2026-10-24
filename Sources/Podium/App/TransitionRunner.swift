@@ -450,7 +450,6 @@ final class TransitionRunner {
                 instant.append(w)
                 continue
             }
-            logger.log("leave of \(w.windowID, privacy: .public): card")
             let card = makeCard(image: image, pointWidth: frame.width)
             card.apply(framePose(frame, card: card))
             setZ(card, Self.transitionZ)
@@ -576,7 +575,6 @@ final class TransitionRunner {
                 animator.drive(t.card, to: stripPose(card: t.card, slot: slot, stage: stage, index: index),
                                spring: spring)
                 if !visible {
-                    logger.log("card of \(w.windowID, privacy: .public) tucks away (index \(index, privacy: .public), slot \(slot != nil, privacy: .public))")
                     // Fades out while tucking away, then goes.
                     let generation = t.generation
                     animator.onSettled(t.card) { [weak self] in
