@@ -4,8 +4,10 @@ public enum StripSide: String, Codable, CaseIterable, Sendable {
     case left, right
 }
 
-/// Every measurable constant of the strip's look and feel. Values are placeholders
-/// until measured against Apple's Stage Manager.
+/// Every measurable constant of the strip's look and feel. Values named in
+/// `docs/research/2026-10-24-apple-strip-defaults.md` are Apple's own Stage Manager defaults
+/// (`WindowManagerPreferencesController`, `WindowManagerSpringBehavior`); the rest are still
+/// Podium's estimates.
 public struct Tuning: Codable, Equatable, Sendable {
     public var stripEdgeInset: CGFloat
     public var itemMaxSize: CGSize
@@ -29,23 +31,23 @@ public struct Tuning: Codable, Equatable, Sendable {
 
     public static let initial = Tuning(
         stripEdgeInset: 16,
-        itemMaxSize: CGSize(width: 160, height: 110),
-        rowSpacing: 22,
+        itemMaxSize: CGSize(width: 170, height: 160),
+        rowSpacing: 32,
         maxRowCount: 6,
         tiltRadians: 0.30,
         perspectiveDistance: 900,
-        cornerRadius: 12,
+        cornerRadius: 8,
         pileMaxWindows: 3,
         pileStepOffset: CGSize(width: 6, height: -6),
         pileStepScale: 0.94,
-        appIconSize: 28,
-        hoverScaleDistance: 8,
-        clickDownScaleDistance: 4,
-        autoHideDelay: 0.25,
+        appIconSize: 40,
+        hoverScaleDistance: 16,
+        clickDownScaleDistance: 16,
+        autoHideDelay: 0.15,
         autoHideOverlapThreshold: 0.15,
         hiddenPeekWidth: 6,
         stageInset: 24,
-        transitionSpring: Spring(response: 0.32, dampingRatio: 0.9),
+        transitionSpring: Spring(response: 0.38, dampingRatio: 1.0),
         hoverSpring: Spring(response: 0.25, dampingRatio: 0.8)
     )
 }

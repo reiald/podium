@@ -7,10 +7,10 @@ private let screen = CGRect(x: 0, y: 25, width: 1440, height: 875)
 
 @Test func customizationDefaultsReproduceInitialTuning() {
     let d = StripCustomization.defaults
-    #expect(d.thumbnailWidth == 160)
+    #expect(d.thumbnailWidth == 170)
     #expect(abs(d.tiltDegrees - 17.188733853924695) < 1e-9)
     #expect(d.showAppIcons)
-    #expect(d.appIconSize == 28)
+    #expect(d.appIconSize == 40)
     #expect(d.applied(to: .initial) == Tuning.initial)
     #expect(d.clamped() == d)
 }
@@ -27,7 +27,7 @@ private let screen = CGRect(x: 0, y: 25, width: 1440, height: 875)
 @Test func customizationWidthKeepsAspect() {
     let t = StripCustomization(thumbnailWidth: 240, tiltDegrees: 10, showAppIcons: true, appIconSize: 28).applied(to: .initial)
     #expect(t.itemMaxSize.width == 240)
-    #expect(abs(t.itemMaxSize.height - 240 * 110 / 160) < 1e-9)
+    #expect(abs(t.itemMaxSize.height - 240 * 160 / 170) < 1e-9)
 }
 
 @Test func customizationTiltIsDegrees() {

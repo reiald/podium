@@ -45,9 +45,9 @@ import Testing
         h.update(overlapFraction: 0.5, pointer: outside, band: band, screen: screen, side: .right, now: 0)
         h.update(overlapFraction: 0.5, pointer: CGPoint(x: 900, y: 10), band: band, screen: screen, side: .right, now: 0.2)
         h.update(overlapFraction: 0.5, pointer: outside, band: band, screen: screen, side: .right, now: 0.3)
-        h.update(overlapFraction: 0.5, pointer: outside, band: band, screen: screen, side: .right, now: 0.5)
+        h.update(overlapFraction: 0.5, pointer: outside, band: band, screen: screen, side: .right, now: 0.3 + tuning.autoHideDelay * 0.8)
         #expect(!h.isHidden)
-        h.update(overlapFraction: 0.5, pointer: outside, band: band, screen: screen, side: .right, now: 0.55)
+        h.update(overlapFraction: 0.5, pointer: outside, band: band, screen: screen, side: .right, now: 0.3 + tuning.autoHideDelay + 0.01)
         #expect(h.isHidden)
     }
 
