@@ -60,3 +60,11 @@ private let screen = CGRect(x: 0, y: 25, width: 1440, height: 875)
         #expect(band.contains(slots[0].frame))
     }
 }
+
+@Test func customizationChoosesUniformThumbnails() {
+    #expect(!StripCustomization.defaults.uniformThumbnails)
+    var c = StripCustomization.defaults
+    c.uniformThumbnails = true
+    #expect(c.applied(to: .initial).uniformItemSize)
+    #expect(!StripCustomization.defaults.applied(to: .initial).uniformItemSize)
+}

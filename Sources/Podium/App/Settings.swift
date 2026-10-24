@@ -45,6 +45,7 @@ final class Settings: ObservableObject {
             defaults.set(Double(c.tiltDegrees), forKey: "tiltDegrees")
             defaults.set(c.showAppIcons, forKey: "showAppIcons")
             defaults.set(Double(c.appIconSize), forKey: "appIconSize")
+            defaults.set(c.uniformThumbnails, forKey: "uniformThumbnails")
         }
     }
 
@@ -68,7 +69,8 @@ final class Settings: ObservableObject {
             thumbnailWidth: number("thumbnailWidth", d.thumbnailWidth),
             tiltDegrees: number("tiltDegrees", d.tiltDegrees),
             showAppIcons: defaults.object(forKey: "showAppIcons") as? Bool ?? d.showAppIcons,
-            appIconSize: number("appIconSize", d.appIconSize)
+            appIconSize: number("appIconSize", d.appIconSize),
+            uniformThumbnails: defaults.bool(forKey: "uniformThumbnails")
         ).clamped()
     }
 

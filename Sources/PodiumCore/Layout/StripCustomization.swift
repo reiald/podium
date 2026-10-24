@@ -9,6 +9,8 @@ public struct StripCustomization: Equatable, Codable, Sendable {
     public var tiltDegrees: CGFloat
     public var showAppIcons: Bool
     public var appIconSize: CGFloat
+    /// Every thumbnail the same size; off, sized like their windows (Apple's strip).
+    public var uniformThumbnails: Bool
 
     public static let thumbnailWidthRange: ClosedRange<CGFloat> = 100...320
     public static let tiltDegreesRange: ClosedRange<CGFloat> = 0...30
@@ -22,11 +24,13 @@ public struct StripCustomization: Equatable, Codable, Sendable {
         appIconSize: Tuning.initial.appIconSize
     )
 
-    public init(thumbnailWidth: CGFloat, tiltDegrees: CGFloat, showAppIcons: Bool, appIconSize: CGFloat) {
+    public init(thumbnailWidth: CGFloat, tiltDegrees: CGFloat, showAppIcons: Bool, appIconSize: CGFloat,
+                uniformThumbnails: Bool = false) {
         self.thumbnailWidth = thumbnailWidth
         self.tiltDegrees = tiltDegrees
         self.showAppIcons = showAppIcons
         self.appIconSize = appIconSize
+        self.uniformThumbnails = uniformThumbnails
     }
 
     /// Every value within its range; a non-finite value falls back to its default.
@@ -39,7 +43,8 @@ public struct StripCustomization: Equatable, Codable, Sendable {
             thumbnailWidth: clamp(thumbnailWidth, Self.thumbnailWidthRange, d.thumbnailWidth),
             tiltDegrees: clamp(tiltDegrees, Self.tiltDegreesRange, d.tiltDegrees),
             showAppIcons: showAppIcons,
-            appIconSize: clamp(appIconSize, Self.appIconSizeRange, d.appIconSize)
+            appIconSize: clamp(appIconSize, Self.appIconSizeRange, d.appIconSize),
+            uniformThumbnails: uniformThumbnails
         )
     }
 
@@ -54,6 +59,7 @@ public struct StripCustomization: Equatable, Codable, Sendable {
         t.tiltRadians = c.tiltDegrees == Self.defaults.tiltDegrees
             ? Tuning.initial.tiltRadians : c.tiltDegrees * .pi / 180
         t.appIconSize = c.appIconSize
+        t.uniformItemSize = c.uniformThumbnails
         return t
     }
 }

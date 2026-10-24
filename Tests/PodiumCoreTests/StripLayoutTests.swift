@@ -109,3 +109,17 @@ private func stages(_ n: Int) -> [Stage] {
     let left = stripSlots(for: st, in: screen, side: .left, tuning: t, windowSizes: sizes)
     for slot in left { #expect(slot.frame.minX == screen.minX + t.stripEdgeInset) }
 }
+
+@Test func uniformSizesFitEveryWindowToTheBox() {
+    let st = stages(2)
+    var u = t
+    u.uniformItemSize = true
+    let box = u.itemMaxSize
+    let sizes = [st[0].id: CGSize(width: 1000, height: 500), st[1].id: CGSize(width: 400, height: 600)]
+    let slots = stripSlots(for: st, in: screen, side: .right, tuning: u, windowSizes: sizes)
+    let wide = min(box.width / 1000, box.height / 500)
+    let tall = min(box.width / 400, box.height / 600)
+    #expect(abs(slots[0].frame.width - 1000 * wide) < 0.001 && abs(slots[0].frame.height - 500 * wide) < 0.001)
+    #expect(abs(slots[1].frame.width - 400 * tall) < 0.001 && abs(slots[1].frame.height - 600 * tall) < 0.001)
+    #expect(!t.uniformItemSize)                                   // Apple's shared scale by default
+}

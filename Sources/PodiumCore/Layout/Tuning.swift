@@ -28,6 +28,8 @@ public struct Tuning: Codable, Equatable, Sendable {
     public var stageInset: CGFloat
     public var transitionSpring: Spring
     public var hoverSpring: Spring
+    /// Every strip item fills the thumbnail box; off, items share one scale as in Apple's strip.
+    public var uniformItemSize: Bool = false
 
     public static let initial = Tuning(
         stripEdgeInset: 16,

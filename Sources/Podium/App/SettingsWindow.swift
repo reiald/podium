@@ -43,6 +43,11 @@ struct SettingsView: View {
                 LabeledSlider(title: "Thumbnail size", value: $settings.customization.thumbnailWidth,
                               range: StripCustomization.thumbnailWidthRange, wholePoints: true,
                               label: { "\(Int($0.rounded())) pt" })
+                Picker("Thumbnail sizes", selection: $settings.customization.uniformThumbnails) {
+                    Text("Match Windows").tag(false)
+                    Text("Uniform").tag(true)
+                }
+                .pickerStyle(.segmented)
                 LabeledSlider(title: "Tilt", value: $settings.customization.tiltDegrees,
                               range: StripCustomization.tiltDegreesRange, wholePoints: false,
                               label: { "\(Int($0.rounded()))°" })

@@ -39,7 +39,8 @@ public func stageArea(in screen: CGRect, side: StripSide, tuning: Tuning) -> CGR
 ///
 /// As in Apple's strip, every item is its front window (`windowSizes`, by stage id) scaled by
 /// one shared factor, so a full-width window is `itemMaxSize.width` wide and smaller windows
-/// stay smaller; an item never exceeds `itemMaxSize`. Slots hug the screen edge, stack
+/// stay smaller; an item never exceeds `itemMaxSize`. With `uniformItemSize`, every item
+/// fills the box instead. Slots hug the screen edge, stack
 /// `rowSpacing` apart, and the stack is centered. A stage without a known size gets the box.
 public func stripSlots(for stages: [Stage], in screen: CGRect, side: StripSide, tuning: Tuning,
                        windowSizes: [UUID: CGSize] = [:]) -> [StripSlot] {
@@ -49,7 +50,8 @@ public func stripSlots(for stages: [Stage], in screen: CGRect, side: StripSide, 
     let scale = screen.width > 0 ? box.width / screen.width : 0
     let sizes = shown.map { stage -> CGSize in
         guard let window = windowSizes[stage.id], window.width > 0, window.height > 0, scale > 0 else { return box }
-        let fit = min(scale, box.width / window.width, box.height / window.height)
+        let boxFit = min(box.width / window.width, box.height / window.height)
+        let fit = tuning.uniformItemSize ? boxFit : min(scale, boxFit)
         return CGSize(width: window.width * fit, height: window.height * fit)
     }
     let total = sizes.reduce(0) { $0 + $1.height } + CGFloat(shown.count - 1) * tuning.rowSpacing
