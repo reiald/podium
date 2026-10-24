@@ -343,10 +343,10 @@ final class Coordinator {
     /// shows it, and only if it is still the latest press and the same stage is on screen
     /// (`WallpaperVerdicts`). Otherwise a Finder activation held for the verdict goes through.
     private func wallpaperPressEnded(at p: CGPoint?) {
-        guard let p, isRunning, wallpaperClickShowsDesktop, let active = board.activeStageID else {
+        guard let p, isRunning, wallpaperClickShowsDesktop, board.activeStageID != nil || board.canReturnFromDesktop else {
             return applyWallpaperOutcome(wallpaperVerdicts.pressDiscarded())
         }
-        let press = wallpaperVerdicts.pressEnded(activeStageID: active)
+        let press = wallpaperVerdicts.pressEnded(activeStageID: board.activeStageID)
         WallpaperProbe.check(p) { [weak self] isWallpaper in
             guard let self else { return }
             self.applyWallpaperOutcome(self.wallpaperVerdicts.verdict(
@@ -358,8 +358,8 @@ final class Coordinator {
         switch outcome {
         case .none:
             break
-        case .showDesktop:
-            showDesktop()
+        case .wallpaperClicked:
+            if board.activeStageID != nil { showDesktop() } else { returnFromDesktop() }
         case let .release(pid):
             // Finder's activation by a desktop press that was no wallpaper click.
             if isRunning, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { handle(.appActivated(pid)) }
@@ -368,7 +368,8 @@ final class Coordinator {
 
     /// Wallpaper click: the whole active stage flies to the front of the strip and the stage
     /// area is left empty, as when switching away from it; Finder takes focus. A strip click
-    /// brings it back. Nothing to do on the desktop.
+    /// or another wallpaper click (`returnFromDesktop`) brings it back. Nothing to do on the
+    /// desktop.
     func showDesktop() {
         guard isRunning, !applying, wallpaperClickShowsDesktop,
               let leaving = board.activeStage?.windows.first else { return }
@@ -378,6 +379,18 @@ final class Coordinator {
         apply(from: old)
         // The stage's windows are about to be parked and must not keep keyboard focus.
         handOffFocus(from: leaving)
+    }
+
+    /// A second wallpaper click: the stage the first one cleared comes back, its front app
+    /// active, as a strip click would bring it.
+    func returnFromDesktop() {
+        guard isRunning, !applying, wallpaperClickShowsDesktop, board.canReturnFromDesktop else { return }
+        logger.log("wallpaper clicked again; the stage comes back")
+        let old = board
+        board.returnFromDesktop()
+        systemFocus.stageChosen(at: CACurrentMediaTime())
+        apply(from: old)
+        activateFrontApp()
     }
 
     /// Whether a minimize of `w` can go to the strip: an on-screen window of the active stage.

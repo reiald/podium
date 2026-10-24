@@ -1019,3 +1019,38 @@ private func mixedStripStage() -> (StageBoard, UUID) {
     board.windowFocused(b)
     #expect(board.stages.filter { $0.windows.contains { $0.pid == 1 } }.count == 1)
 }
+
+@Test func secondWallpaperClickBringsTheStageBack() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.windowOpened(w(2, 21))
+    let stage = b.activeStage
+    #expect(!b.canReturnFromDesktop)
+    b.showDesktop()
+    #expect(b.activeStage == nil)
+    #expect(b.canReturnFromDesktop)
+    b.returnFromDesktop()
+    #expect(b.activeStage == stage)
+    #expect(!b.canReturnFromDesktop)
+}
+
+@Test func onlyTheWallpaperDesktopComesBack() {
+    var b = board()
+    b.windowOpened(w(1, 10))
+    b.windowOpened(w(2, 20))
+    b.showDesktop()
+    b.windowFocused(w(1, 10))                    // a strip click ends it
+    #expect(!b.canReturnFromDesktop)
+    b.minimizeToStrip(w(1, 10))                  // desktop, but not from the wallpaper
+    #expect(b.activeStage == nil)
+    #expect(!b.canReturnFromDesktop)
+    var closed = board()
+    closed.windowOpened(w(1, 10))
+    closed.showDesktop()
+    closed.windowClosed(w(1, 10))                // nothing left to bring back
+    #expect(!closed.canReturnFromDesktop)
+    let before = closed
+    closed.returnFromDesktop()
+    #expect(closed == before)
+}

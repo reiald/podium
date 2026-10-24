@@ -130,8 +130,8 @@ public struct WallpaperVerdicts: Equatable, Sendable {
     public enum Outcome: Equatable, Sendable {
         /// Nothing to do yet.
         case none
-        /// Send the stage away.
-        case showDesktop
+        /// A wallpaper click: send the stage away, or bring it back from the desktop.
+        case wallpaperClicked
         /// No press waits any more: apply this held Finder activation.
         case release(Int32)
     }
@@ -139,8 +139,9 @@ public struct WallpaperVerdicts: Equatable, Sendable {
     public static let lateActivationWindow: TimeInterval = 0.3
 
     private var latest = 0
-    /// Presses waiting for a verdict, with the active stage when each ended.
-    private var waiting: [Int: UUID] = [:]
+    /// Presses waiting for a verdict, with the active stage when each ended (nil: the
+    /// desktop).
+    private var waiting: [Int: UUID?] = [:]
     public private(set) var held: Int32?
     private var ignoreFinderUntil = -TimeInterval.infinity
 
@@ -149,9 +150,9 @@ public struct WallpaperVerdicts: Equatable, Sendable {
     /// Some press waits for its verdict.
     public var isWaiting: Bool { !waiting.isEmpty }
 
-    /// A plain click ended with `activeStageID` on screen: its hit-test starts. Returns
+    /// A plain click ended with `activeStageID` on screen (nil: the desktop): its hit-test starts. Returns
     /// the press's number, for `verdict`.
-    public mutating func pressEnded(activeStageID: UUID) -> Int {
+    public mutating func pressEnded(activeStageID: UUID?) -> Int {
         latest += 1
         waiting[latest] = activeStageID
         return latest
@@ -180,7 +181,7 @@ public struct WallpaperVerdicts: Equatable, Sendable {
         if isWallpaper, press == latest, stage == activeStageID {
             held = nil
             ignoreFinderUntil = now + Self.lateActivationWindow
-            return .showDesktop
+            return .wallpaperClicked
         }
         return releaseIfIdle()
     }

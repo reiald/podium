@@ -300,7 +300,7 @@ final class StripPresenter {
         closeAppView(reason: "click outside")
         framesAtMouseDown = activeStageFrames()
         mouseDownAt = Self.location(of: event)
-        if wallpaperClickEnabled, board().activeStage != nil {
+        if wallpaperClickEnabled, board().activeStage != nil || board().canReturnFromDesktop {
             wallpaperPress.began(at: Self.location(of: event), time: event.timestamp,
                                  modifiers: Self.modifiers(event.modifierFlags))
             if wallpaperPress.isPending { onWallpaperPressBegan(layout.screen) }

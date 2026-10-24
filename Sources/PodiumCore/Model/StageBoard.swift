@@ -55,6 +55,9 @@ public struct StageBoard: Equatable, Sendable {
         var grouping: WindowGrouping = .allAtOnce
         var proposal: WindowRef?
         var emptyStage = false
+        /// The empty stage came from a wallpaper click; another one brings `proposal`'s
+        /// stage back.
+        var desktopFromWallpaper = false
 
         mutating func toFront(_ w: WindowRef) {
             zOrder.removeAll { $0 == w }
@@ -261,7 +264,23 @@ public struct StageBoard: Equatable, Sendable {
     /// on the desktop.
     public mutating func showDesktop() {
         guard activeStage != nil else { return }
-        update { $0.emptyStage = true }
+        update { i in
+            i.emptyStage = true
+            i.desktopFromWallpaper = true
+        }
+    }
+
+    /// The desktop shows because of a wallpaper click, and the stage it cleared is still
+    /// there to bring back.
+    public var canReturnFromDesktop: Bool {
+        guard inputs.desktopFromWallpaper, let p = inputs.proposal else { return false }
+        return !isMinimizedAnywhere(p) && !inputs.hidden.contains(p.pid)
+    }
+
+    /// A second wallpaper click: the stage the first one cleared comes back.
+    public mutating func returnFromDesktop() {
+        guard canReturnFromDesktop else { return }
+        update { $0.emptyStage = false }
     }
 
     /// `w` went to the Dock. It leaves its user set.
@@ -376,6 +395,7 @@ public struct StageBoard: Equatable, Sendable {
     private mutating func update(_ change: (inout Inputs) -> Void) {
         var next = inputs
         change(&next)
+        if !next.emptyStage || next.proposal == nil { next.desktopFromWallpaper = false }
         guard next != inputs else { return }
         inputs = next
         assignment = assign(AssignmentInput(

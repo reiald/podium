@@ -181,8 +181,16 @@ import Testing
         var v = WallpaperVerdicts()
         let press = v.pressEnded(activeStageID: a)
         #expect(v.isWaiting)
-        #expect(v.verdict(press, isWallpaper: true, activeStageID: a, now: 1) == .showDesktop)
+        #expect(v.verdict(press, isWallpaper: true, activeStageID: a, now: 1) == .wallpaperClicked)
         #expect(!v.isWaiting)
+    }
+
+    @Test func wallpaperClickOnTheDesktopCounts() {
+        var v = WallpaperVerdicts()
+        let press = v.pressEnded(activeStageID: nil)
+        #expect(v.verdict(press, isWallpaper: true, activeStageID: nil, now: 1) == .wallpaperClicked)
+        let p2 = v.pressEnded(activeStageID: nil)
+        #expect(v.verdict(p2, isWallpaper: true, activeStageID: a, now: 1) == .none)
     }
 
     @Test func noWallpaperDoesNothing() {
@@ -229,7 +237,7 @@ import Testing
         var v = WallpaperVerdicts()
         let press = v.pressEnded(activeStageID: a)
         v.hold(7)
-        #expect(v.verdict(press, isWallpaper: true, activeStageID: a, now: 1) == .showDesktop)
+        #expect(v.verdict(press, isWallpaper: true, activeStageID: a, now: 1) == .wallpaperClicked)
         #expect(v.held == nil)
     }
 
