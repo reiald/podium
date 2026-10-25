@@ -108,7 +108,17 @@ final class AXWindowBackend: WindowBackend {
         isManageable(role: AX.string(kAXRoleAttribute, of: e),
                      subrole: AX.string(kAXSubroleAttribute, of: e),
                      isFullscreen: AX.bool(fullScreenAttribute, of: e),
-                     isMinimized: AX.bool(kAXMinimizedAttribute, of: e))
+                     isMinimized: AX.bool(kAXMinimizedAttribute, of: e),
+                     title: AX.string(kAXTitleAttribute, of: e),
+                     level: windowLevel(of: e))
+    }
+
+    /// The window-server layer of `e` (0 for an ordinary window; above 0 for always-on-top windows).
+    private static func windowLevel(of e: AXUIElement) -> Int {
+        guard let id = AX.windowID(of: e),
+              let info = CGWindowListCreateDescriptionFromArray([UInt(id)] as CFArray) as? [[String: Any]],
+              let layer = info.first?[kCGWindowLayer as String] as? Int else { return 0 }
+        return layer
     }
 
     private static let fullScreenAttribute = "AXFullScreen"
