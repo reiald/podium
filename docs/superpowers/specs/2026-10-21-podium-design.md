@@ -1,4 +1,4 @@
-# Podium — Design
+# Podium design
 
 Date: 2026-10-21
 Status: draft, awaiting owner approval
@@ -92,7 +92,7 @@ Anyone on a Mac who likes Stage Manager but wants it on the other side, or wants
 - **Turning off Apple's Stage Manager:** on first launch, if Apple's is on, Podium explains and offers a button that turns it off (with the user's click). Podium does not turn Apple's back on automatically on quit; the menu offers it.
 - **Notarization:** not needed for v1 development builds. Decide before the first public release; it doesn't block building.
 
-## Team review outcomes (PM, Architect, Developer, QA — 2026-10-21)
+## Team review outcomes (PM, Architect, Developer, QA, 2026-10-21)
 
 Owner feedback on the upgraded spike: minimize still goes to the Dock, and other windows aren't hidden the way Stage Manager hides them. Root cause of both: those features were never in the spike (it parks one chosen window and has no stage model or minimize handling). They are core v1 work, not spike patches.
 

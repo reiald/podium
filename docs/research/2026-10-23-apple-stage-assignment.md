@@ -81,7 +81,7 @@ Every window gets one `WindowDestination`. The classifier looks at window type, 
 - A window in a user window set whose found properties span more than one process gets `crossAppWindowSet(id)`. A window in a user set whose windows all belong to one process gets `intraAppWindowSet(psn, id)`. **Inferred** from the case names and from `UserWindowSetFoundProperties { windowIDs, processSerialNumbers }`; the exact branch was not isolated.
 - Normal app windows get `processPrimary(psn)`. Sticky windows and accessory windows (panels and similar) get `processAppSticky` and `processAccessory`. Windows that must stay free get `freeform`. **Inferred** from the names; the classifier branches exist but I did not map them.
 
-### 2.2 Group building (`StageManagerWindowGroupComponent`, builder, per-process helper ) — Observed
+### 2.2 Group building (`StageManagerWindowGroupComponent`), observed
 
 The builder walks the input windows in order and switches on the destination tag:
 
@@ -102,7 +102,7 @@ So the group component **never produces `.processWindowSet`, and never merges an
 
 Group order: groups are appended in the order their first window is visited. The insert-at-index path only applies to the accessory case. The input `windows` is an `OrderedDictionary`; that it is z-ordered front-first is **Inferred** (the name `processSerialNumberToZOrderedWindowIDs` and the strip behaviour fit this).
 
-### 2.3 Reshaping inside the assignment component — Observed
+### 2.3 Reshaping inside the assignment component, observed
 
 Before choosing the stage, every group is reshaped using the minimized window IDs.
 
@@ -133,7 +133,7 @@ So **minimized windows stay in their app's (or cross-app set's) container group,
 ## 3. Q2/Q3: stage choice and strip order 
 
 
-### 3.1 Stage group — Observed
+### 3.1 Stage group, observed
 1. Walk the (reshaped) groups in order; inside each, walk every window set and every window. Return the **first group containing the window named by `currentWindowProposal`**.
 2. If none is found (no proposal, or its window is in no group), the stage is **the first group in order that has at least one window set that is not `.minimizedWindow`**.
 3. If `stageStyle != .standard` (i.e. `.empty`), the found group is discarded. `stageContainerGroupID = nil` and `stageWindowSetID = nil`: an empty stage, i.e. the desktop.
@@ -141,7 +141,7 @@ So **minimized windows stay in their app's (or cross-app set's) container group,
 
 The previous stage is not consulted when picking the stage; only the proposal and group order are. **Observed.** If the proposed window moves to another group, the stage follows it at the next update. The previous stage group then feeds strip ordering (3.3).
 
-### 3.2 Is the stage group also in the strip? — Observed
+### 3.2 Is the stage group also in the strip?, observed
 The strip candidate list starts as all group IDs in order. The stage group's ID is removed **only if the stage group has exactly one window set and that set is not minimized**. Otherwise the stage group **stays in the strip candidates**:
 - One at a Time with ≥2 windows: the app also shows in the strip with its other windows.
 - The app has minimized windows: they show in the strip under the app.
@@ -149,7 +149,7 @@ The strip candidate list starts as all group IDs in order. The stage group's ID 
 
 The strip component draws the pile for that group without the stage window set. That last detail is **Inferred**; I did not read the strip drawing code.
 
-### 3.3 Strip order — Observed
+### 3.3 Strip order, observed
 Inputs: the previous `sortedStripContainerGroupIDs` (from `overridePreviousState` if given, else the component state), the candidates, the previous `stageContainerGroupID`, the replacement order and the maximum row count.
 
 - **`.recency`**: return the candidates unchanged. Strip order is then the container-group order, i.e. window z-order: most recent first (Inferred via 2.2).
@@ -165,7 +165,7 @@ Inputs: the previous `sortedStripContainerGroupIDs` (from `overridePreviousState
 
 The component state is then overwritten with `(stripContainerGroupIDs, stageContainerGroupID)`.
 
-### 3.4 `hiddenContainerGroupIDs` and `exclusiveProcessSerialNumbers` — Observed
+### 3.4 `hiddenContainerGroupIDs` and `exclusiveProcessSerialNumbers`, observed
 `hiddenContainerGroupIDs` is **not** an overflow list. It is only non-empty when `stripParameters.exclusiveProcessSerialNumbers != nil`. In that case, for each strip ID:
 - if the group's represented PSNs are disjoint from the exclusive set: the group goes to `hidden`;
 - otherwise it stays. A `.process(psn)` group is **exploded** into one group per window set, skipping the stage window set. A `.process` window set becomes one `.processWindowSet(psn, .window(wid))` group per window. Any other set becomes `.processWindowSet(psn, setID)`. Both are inserted into `containerGroups`.
@@ -174,7 +174,7 @@ This is the per-app window exposé in the strip (the separate `exposeStripAssign
 
 ## 4. Q4: operations for drag, minimize, close, new window
 
-### 4.1 `ComputeTransientWindowSetOperations` events — Observed
+### 4.1 `ComputeTransientWindowSetOperations` events, observed
 - **addToStage(W)**, e.g. dragging a strip item onto the stage:
   - if the current stage window set is `.userWindowSet(id)`: `[.modify(.addWindowToUserWindowSet(id, W)), .orderWindowFront(W)]`;
   - else, if the stage window set has windows: `[.modify(.createUserWindowSet(UserWindowSet(id: proposedStageUserWindowSetID ?? new, windows: stageSetWindows + [W]))), .orderWindowFront(W)]`. A new ID is generated when none is proposed;
@@ -186,14 +186,14 @@ This is the per-app window exposé in the strip (the separate `exposeStripAssign
 
 The drag modifiers (`StageManagerWindowDragModifierComponent`, `StageManagerStripStageWindowDragModifierComponent`) emit `applyOperations([TransientWindowSetOperation])`. Mapping their `stripToStage` / `stageToStrip` directions to addToStage/removeFromStage is **Inferred** from names.
 
-### 4.2 Minimize — partly Observed
+### 4.2 Minimize, partly observed
 - In the assignment, minimized windows become `.minimizedWindow` sets in their group (2.3b). They cannot become the stage window set, and they keep the group in the strip (3.2). (Observed.)
 - `StageManagerMiniaturizedWindowsComponent` branches on the preference `stageManagerMinimizationBehavior == .dock` (Observed). It has a `removeFromUserWindowSet(Set<WindowID>)` action. That minimizing (in the non-dock mode) takes the window out of its user set is **Inferred**: the action name plus the branch layout; the payload was not traced.
 
 ### 4.3 Close
 Nothing in the assignment special-cases close. A closed window disappears from the windows map, so its `.window` set and possibly its group disappear. If the group was the stage, the next update falls back to the proposal or the first non-minimized group (3.1). If it was in the strip, `stableLeastRecentlyUsed` fills its slot with a new group (3.3). (Observed as a consequence of the algorithm; the close event path itself was not traced.) The proposal for the next key window is covered in 5.
 
-### 4.4 New window — Inferred
+### 4.4 New window, inferred
 `StageManagerAutomaticAddToStageComponent`:
 - Gated by `enableAutomaticNewWindowAddToWindowSet` (Observed, returns `[]` when false).
 - Compares the previous and current assignment and `previousSpaceOrderedWindowIDs`.
