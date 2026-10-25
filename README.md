@@ -1,8 +1,17 @@
-<p align="center"><img src="design/kit/github/readme-banner.png" alt="Podium: Stage your work. A Stage Manager alternative for macOS." width="100%"></p>
+<p align="center"><img src="design/kit/github/readme-banner.png" alt="Podium, a Stage Manager alternative for macOS" width="100%"></p>
 
-Podium is a free, open-source menu bar app that replaces Apple's Stage Manager. The strip of recent windows sits on the left or the right of your screen, the Dock never moves, and nothing needs SIP changes.
+# Podium: a Stage Manager alternative for macOS
+
+Podium is a free, open-source menu bar app that replaces Apple's Stage Manager. Put the strip of recent windows on the **left or the right** of your screen, minimize windows to the strip instead of the Dock, and change how the strip looks. It needs no SIP changes and never moves your Dock.
 
 Podium is not affiliated with or endorsed by Apple. "Stage Manager" is a trademark of Apple Inc.
+
+## Why Podium
+
+- **Choose the side.** Apple's Stage Manager keeps its strip on the left edge. Podium puts it on the left or the right, and you can switch from the menu bar at any time.
+- **Change the look.** Set the thumbnail size and shape, the tilt, and the app icon size.
+- **Minimize to the strip.** The minimize button, a Dock click, or a drag by the title bar sends a window to the strip. It returns when you click it.
+- **Your windows stay safe.** Podium records every window it hides and restores them if it ever quits or crashes.
 
 ## Install
 
@@ -12,7 +21,7 @@ Releases are not notarized yet, so macOS shows an "unidentified developer" warni
 
 **Or build it yourself:** see [Build from source](#build-from-source).
 
-Requires macOS 14 or later.
+Requires macOS 14 or later. Developed on macOS 27.
 
 ## First launch
 
@@ -25,19 +34,55 @@ Turn Apple's Stage Manager off first (System Settings > Desktop & Dock). Podium 
 
 ## What it does
 
-- A strip of your recent windows on the left or right edge, with piles of up to three windows per app and the app icon on each item.
+- Shows a strip of your recent windows on one edge, with piles of up to three windows per app and the app icon on each item.
 - Click an item to bring its windows on stage. Shift-click adds it to the current stage. Drag an item onto the stage to combine them.
-- Drag a window by its title bar into the strip, or minimize it to the strip, instead of the Dock.
+- Drag a window by its title bar into the strip, or minimize it, to put it in the strip.
 - Click the wallpaper to show the desktop, and click it again to bring your windows back.
-- Optional Dock-icon shortcuts: click the front app's icon to minimize it to the strip, and Shift-click another app's icon to add it to the stage.
-- Auto-hide when a window covers the strip, with a peek at the edge.
-- Show all of an app's windows at once, or one at a time.
-- Floating apps: windows of the apps you list (Archive Utility, qView and Preview by default) open over the stage and leave it alone.
-- Settings for thumbnail size and shape, tilt, icon size, strip side, launch at login, and a hotkey (Control-Option-Command-P) that turns Podium on and off.
+- Hides the strip when a window covers it, and shows it again when your pointer reaches the edge.
+- Opens the windows of apps on your floating list (Archive Utility, qView and Preview by default) over the stage without changing it.
 
-## Your windows stay safe
+## Settings
 
-Podium parks the windows it hides, and it writes each one to `~/Library/Application Support/Podium/parked.json`. If Podium quits or crashes, the next launch puts them back. **Restore All Windows** in the menu bar does the same on demand.
+Open **Settings** from the Podium icon in the menu bar. **Strip side**, **Minimize to**, **Auto-hide** and **Restore All Windows** are also in that menu.
+
+<img src="docs/images/settings.png" alt="Podium Settings window" width="420" align="right">
+
+| Option | What it does | Default |
+|---|---|---|
+| Open Podium at login | Starts Podium when you log in. | Off |
+| Turn on or off with Control-Option-Command-P | A global hotkey that turns Podium on or off. | On |
+| Strip side | Puts the strip on the left or the right edge. | Right |
+| Thumbnail size | Width of the largest thumbnail, 100 to 320 pt. | 290 pt |
+| Thumbnail sizes | Match Windows scales every window by the same amount, so small windows stay small. Uniform fits every window to the same box. | Match Windows |
+| Tilt | Angles the thumbnails, 0 to 30 degrees. | 17 degrees |
+| Auto-hide strip | Hides the strip while a window covers it. | On |
+| Show app icons | Shows the app icon on each strip item. | On |
+| Icon size | Size of the app icon, 16 to 48 pt. | 40 pt |
+| Show windows from an app | All at Once puts all of an app's windows on stage together. One at a Time shows one window per click. | All at Once |
+| Minimize to | Sends minimized windows to the strip, or to the Dock as macOS normally does. | Strip |
+| Click an app's Dock icon to minimize it to the strip | Clicking the front app's Dock icon sends its windows to the strip. Turn off the same option in other apps. | Off |
+| Shift-click a Dock icon to add its app to the stage | Adds an app from the strip to the current stage. A plain click still switches to the app. | On |
+| Click wallpaper to show desktop | Clears the stage when you click the wallpaper, and brings it back on a second click. | On |
+| Floating Apps | Windows of the listed apps open over the stage and leave it alone. Add or remove apps from the list. | On: Archive Utility, qView, Preview |
+
+**Reset to Defaults** at the bottom of the window restores every option above.
+
+## Questions
+
+**How do I move the Stage Manager strip to the left or right?**
+Install Podium, turn off Apple's Stage Manager, then choose **Strip on Left** or **Strip on Right** from the Podium menu bar icon.
+
+**Does Podium need SIP disabled?**
+No. It uses the Accessibility and Screen Recording permissions only.
+
+**Can I run it next to Apple's Stage Manager?**
+No. Podium waits until Apple's Stage Manager is off. The menu bar icon has an item to turn Apple's back on.
+
+**What happens to my windows if Podium crashes?**
+Podium writes each hidden window to a file and puts them back on the next launch. **Restore All Windows** in the menu does it immediately.
+
+**Why does macOS warn me when I open it?**
+The download is not notarized yet, which needs a paid Apple Developer ID. Building from source avoids the warning.
 
 ## Build from source
 
@@ -58,7 +103,7 @@ Quit Podium from the menu bar, delete it from Applications, and remove its setti
 
 ```bash
 defaults delete dev.podium.Podium
-rm -rf ~/Library/Application\ Support/Podium
+rm -r ~/Library/Application\ Support/Podium
 ```
 
 ## How it is built
