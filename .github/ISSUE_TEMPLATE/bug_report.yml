@@ -1,0 +1,44 @@
+name: Bug report
+description: Something in Podium does not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what you saw instead.
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: "27.2"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Podium version
+      description: From the release you downloaded, or the commit if you built it.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Your setup
+      description: Number of displays, Spaces or full-screen apps in use, and the apps involved.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Apple's Stage Manager is turned off.
+        - label: Podium has the Accessibility and Screen Recording permissions.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: "Run this in Terminal right after the problem and paste the output: `/usr/bin/log show --last 10m --style compact --predicate 'subsystem == \"dev.podium.Podium\"'`"
+      render: shell
