@@ -398,8 +398,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let on = isManaging
         guard let button = statusItem?.button, !statusFlashing, statusIconOn != on else { return }
         statusIconOn = on
-        button.image = NSImage(systemSymbolName: "rectangle.split.3x1",
-                               accessibilityDescription: on ? "Podium" : "Podium (off)")
+        button.image = StatusIcon.normal ?? NSImage(systemSymbolName: "rectangle.split.3x1",
+                                                    accessibilityDescription: on ? "Podium" : "Podium (off)")
+        button.image?.accessibilityDescription = on ? "Podium" : "Podium (off)"
         button.appearsDisabled = !on
     }
 
@@ -411,8 +412,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusFlashing = true
         statusFlash += 1
         let flash = statusFlash
-        button.image = NSImage(systemSymbolName: on ? "rectangle.split.3x1.fill" : "rectangle.slash",
-                               accessibilityDescription: on ? "Podium" : "Podium (off)")
+        if let icon = StatusIcon.normal {
+            button.image = on ? icon : StatusIcon.slashed(icon)
+        } else {
+            button.image = NSImage(systemSymbolName: on ? "rectangle.split.3x1.fill" : "rectangle.slash",
+                                   accessibilityDescription: on ? "Podium" : "Podium (off)")
+        }
+        button.image?.accessibilityDescription = on ? "Podium" : "Podium (off)"
         button.appearsDisabled = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
             guard let self, self.statusFlash == flash else { return }
