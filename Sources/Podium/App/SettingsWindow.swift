@@ -52,6 +52,10 @@ struct SettingsView: View {
                               range: StripCustomization.tiltDegreesRange, wholePoints: false,
                               label: { "\(Int($0.rounded()))°" })
                 Toggle("Auto-hide strip", isOn: $settings.autoHide)
+                Toggle(isOn: $settings.liveThumbnails) {
+                    Text("Live thumbnails")
+                    Text("Keeps the strip updating, and macOS shows its screen-sharing indicator the whole time. Off, Podium takes one picture of a window as it leaves the stage, and the indicator appears only for a few seconds after a switch.")
+                }
             }
             Section("App Icons") {
                 Toggle("Show app icons", isOn: $settings.customization.showAppIcons)

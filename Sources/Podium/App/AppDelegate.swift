@@ -207,6 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         coordinator.setSide(settings.side)
         coordinator.minimizeBehavior = settings.minimizeBehavior
         coordinator.autoHideEnabled = settings.autoHide
+        coordinator.liveThumbnails = settings.liveThumbnails
         coordinator.dockClickMinimizes = settings.dockClickMinimizes
         coordinator.dockShiftClickAdds = settings.dockShiftClickAdds
         coordinator.floatingApps = settings.floatingApps
@@ -317,6 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             apply(settings.$windowGrouping) { $0.setGrouping($1) },
             apply(settings.$dockClickMinimizes) { $0.dockClickMinimizes = $1 },
             apply(settings.$dockShiftClickAdds) { $0.dockShiftClickAdds = $1 },
+            apply(settings.$liveThumbnails) { $0.liveThumbnails = $1 },
             apply(settings.$floatingApps) { $0.floatingApps = $1 },
             apply(settings.$clickWallpaperShowsDesktop) { $0.wallpaperClickShowsDesktop = $1 },
             settings.$customization.dropFirst()

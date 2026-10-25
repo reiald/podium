@@ -46,6 +46,14 @@ final class Coordinator {
     var dockShiftClickAdds = true {
         didSet { publishMinimizeState() }
     }
+    /// Live strip thumbnails: a periodic refresh of the stage windows and a stream per strip card.
+    /// Off, nothing captures between stage switches, so macOS's screen-sharing indicator stays off.
+    var liveThumbnails = false {
+        didSet {
+            runner?.liveEnabled = liveThumbnails
+            if liveThumbnails { startSnapshotTimer() } else { stopSnapshotTimer() }
+        }
+    }
     /// False: the strip never slides away (auto-hide bypassed).
     var autoHideEnabled = true {
         didSet { presenter?.setAutoHideEnabled(autoHideEnabled) }
@@ -125,6 +133,7 @@ final class Coordinator {
         }
         runner.showAppIcons = showAppIcons
         self.runner = runner
+        runner.liveEnabled = liveThumbnails
         let presenter = StripPresenter(mover: mover, runner: runner,
                                        board: { [weak self] in self?.board ?? StageBoard(displayID: 0) })
         presenter.onSelect = { [weak self] in self?.select(stageID: $0) }
@@ -921,7 +930,7 @@ final class Coordinator {
     /// Keeps on-stage snapshots fresh so a transition never waits on a capture: the focused
     /// window every second, the rest every few seconds. Stopped while displays sleep.
     private func startSnapshotTimer() {
-        guard snapshotTimer == nil else { return }
+        guard liveThumbnails, snapshotTimer == nil else { return }
         snapshotTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.snapshotTimerFired() }
         }

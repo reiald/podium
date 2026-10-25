@@ -28,7 +28,7 @@ Requires macOS 14 or later. Developed on macOS 27.
 Podium asks for two permissions:
 
 - **Accessibility** lets Podium move and raise windows.
-- **Screen Recording** lets Podium draw live thumbnails of your windows. Nothing is recorded or sent anywhere.
+- **Screen Recording** lets Podium take a picture of a window as it leaves the stage, for its strip thumbnail. Pictures stay in memory and are never saved or sent anywhere. macOS shows its screen-sharing indicator for a few seconds after each switch, and not while Podium is idle or while you hover the strip.
 
 Turn Apple's Stage Manager off first (System Settings > Desktop & Dock). Podium will not run while it is on.
 
@@ -62,6 +62,7 @@ Open **Settings** from the Podium icon in the menu bar. **Strip side**, **Minimi
 | Minimize to | Sends minimized windows to the strip, or to the Dock as macOS normally does. | Strip |
 | Click an app's Dock icon to minimize it to the strip | Clicking the front app's Dock icon sends its windows to the strip. Turn off the same option in other apps. | Off |
 | Shift-click a Dock icon to add its app to the stage | Adds an app from the strip to the current stage. A plain click still switches to the app. | On |
+| Live thumbnails | Keeps the strip thumbnails updating all the time. macOS shows its screen-sharing indicator the whole time. Off, a window is captured only as it leaves the stage. | Off |
 | Click wallpaper to show desktop | Clears the stage when you click the wallpaper, and brings it back on a second click. | On |
 | Floating Apps | Windows of the listed apps open over the stage and leave it alone. Add or remove apps from the list. | On: Archive Utility, qView, Preview |
 
@@ -80,6 +81,9 @@ No. Podium waits until Apple's Stage Manager is off. The menu bar icon has an it
 
 **What happens to my windows if Podium crashes?**
 Podium writes each hidden window to a file and puts them back on the next launch. **Restore All Windows** in the menu does it immediately.
+
+**Why does macOS show its screen-sharing indicator?**
+macOS shows it after any app takes a picture of the screen, even a single screenshot. By default Podium captures one window per stage switch, so the indicator appears for a few seconds after a switch and never while you are idle or hovering the strip. Turning on Live thumbnails in Settings keeps it on.
 
 **Why does macOS warn me when I open it?**
 The download is not notarized yet, which needs a paid Apple Developer ID. Building from source avoids the warning.

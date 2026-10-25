@@ -427,12 +427,29 @@ final class TransitionRunner {
         for w in fresh { pendingLeave[w] = token }
         let capture = self.capture
         let leaving = fresh
+        let live = liveEnabled
+        let sizes = Dictionary(uniqueKeysWithValues: leaving.compactMap { w in backend.frame(of: w).map { (w, $0.size) } })
         Task { @MainActor [weak self] in
-            // The cached snapshots (refreshed every 1–4 s while on stage): waiting for a fresh
-            // capture delayed every leave by 25–60 ms.
             var images: [WindowRef: CGImage] = [:]
-            for w in leaving {
-                if let image = await capture.cachedSnapshot(w) { images[w] = image }
+            if live {
+                // The cached snapshots (refreshed every 1–4 s while on stage): waiting for a fresh
+                // capture delayed every leave by 25–60 ms.
+                for w in leaving {
+                    if let image = await capture.cachedSnapshot(w) { images[w] = image }
+                }
+            } else {
+                // Nothing refreshes the cache between switches, so capture each leaving window now,
+                // all at once. This is the only capture, so the sharing indicator stays off otherwise.
+                await withTaskGroup(of: (WindowRef, CGImage?).self) { group in
+                    for w in leaving {
+                        let size = sizes[w]
+                        group.addTask {
+                            if let size, let image = try? await capture.snapshot(w, pointSize: size) { return (w, image) }
+                            return (w, await capture.cachedSnapshot(w))
+                        }
+                    }
+                    for await (w, image) in group { if let image { images[w] = image } }
+                }
             }
             self?.showLeaving(leaving, token: token, images: images)
         }
@@ -698,10 +715,15 @@ final class TransitionRunner {
         }
     }
 
+    /// Live thumbnails are on (Settings); off, no stream runs and nothing refreshes the snapshots.
+    var liveEnabled = false {
+        didSet { if oldValue != liveEnabled { syncLive() } }
+    }
+
     /// Streams live thumbnails (5 fps, 320 px) for exactly the windows whose strip card is
     /// visible: not while hidden, entering, tucked away, or after the card is gone.
     private func syncLive() {
-        let wanted: Set<WindowRef> = isHidden || !CGPreflightScreenCaptureAccess() ? [] : Set(tracks.compactMap { w, t in
+        let wanted: Set<WindowRef> = !liveEnabled || isHidden || !CGPreflightScreenCaptureAccess() ? [] : Set(tracks.compactMap { w, t in
             t.phase == .strip && mover.isParked(w) && isVisibleInStrip(w) ? w : nil
         })
         for w in Array(live.keys) where !wanted.contains(w) { stopLive(w) }

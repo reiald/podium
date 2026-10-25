@@ -13,6 +13,9 @@ final class Settings: ObservableObject {
         didSet { defaults.set(minimizeBehavior.rawValue, forKey: "minimizeBehavior") }
     }
     @Published var autoHide: Bool { didSet { defaults.set(autoHide, forKey: "autoHide") } }
+    /// Keep the strip thumbnails updating continuously. macOS shows its screen-sharing indicator
+    /// the whole time; off, Podium captures a window only when it leaves the stage.
+    @Published var liveThumbnails: Bool { didSet { defaults.set(liveThumbnails, forKey: "liveThumbnails") } }
     /// "Show windows from an app": all at once or one at a time.
     @Published var windowGrouping: WindowGrouping {
         didSet { defaults.set(windowGrouping.rawValue, forKey: "appWindowGrouping") }
@@ -64,6 +67,7 @@ final class Settings: ObservableObject {
         side = defaults.string(forKey: "side").flatMap(StripSide.init(rawValue:)) ?? .right
         minimizeBehavior = defaults.string(forKey: "minimizeBehavior").flatMap(MinimizeBehavior.init(rawValue:)) ?? .strip
         autoHide = defaults.object(forKey: "autoHide") as? Bool ?? true
+        liveThumbnails = defaults.bool(forKey: "liveThumbnails")
         windowGrouping = defaults.string(forKey: "appWindowGrouping").flatMap(WindowGrouping.init(rawValue:)) ?? .allAtOnce
         dockClickMinimizes = defaults.bool(forKey: "dockClickMinimizes")
         dockShiftClickAdds = defaults.object(forKey: "dockShiftClickAdds") as? Bool ?? true
@@ -98,6 +102,7 @@ final class Settings: ObservableObject {
         side = .right
         minimizeBehavior = .strip
         autoHide = true
+        liveThumbnails = false
         windowGrouping = .allAtOnce
         dockClickMinimizes = false
         dockShiftClickAdds = true
