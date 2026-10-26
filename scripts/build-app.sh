@@ -28,5 +28,8 @@ mkdir -p "$app/Contents/Resources"
 cp Resources/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 cp Resources/PodiumMenuTemplate*.png "$app/Contents/Resources/"
 
-codesign --force --sign "$identity" "$app"
+# Notarization needs the hardened runtime and a secure timestamp, which only Developer ID signing can use.
+flags=()
+case "$identity" in "Developer ID"*) flags=(--options runtime --timestamp) ;; esac
+codesign --force ${flags[@]+"${flags[@]}"} --sign "$identity" "$app"
 echo "Built $app (signed: $identity)"

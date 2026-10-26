@@ -73,6 +73,9 @@ Open **Settings** from the Podium icon in the menu bar. **Strip side**, **Minimi
 **How do I move the Stage Manager strip to the left or right?**
 Install Podium, turn off Apple's Stage Manager, then choose **Strip on Left** or **Strip on Right** from the Podium menu bar icon.
 
+**Does Podium work with more than one display?**
+The strip and its animations are on the main display only. Windows on other displays are hidden and brought back without the flying thumbnails.
+
 **Does Podium need SIP disabled?**
 No. It uses the Accessibility and Screen Recording permissions only.
 

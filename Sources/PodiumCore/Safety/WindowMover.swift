@@ -115,7 +115,8 @@ public final class WindowMover {
         guard !entries.isEmpty else { return }
         // Liveness unknown: try to restore everything and forget nothing.
         let live = knownLiveWindows() ?? Set(entries.map(\.window))
-        let actions = recoveryActions(entries: entries, liveWindows: live, visibleScreens: visibleScreens)
+        let actions = recoveryActions(entries: entries, liveWindows: live, visibleScreens: visibleScreens,
+                                     bundleID: backend.bundleID(of:))
         for action in actions {
             switch action {
             case let .forget(w):

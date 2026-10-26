@@ -21,7 +21,7 @@ public struct Stage: Identifiable, Equatable, Sendable {
 /// user sets, minimized windows, hidden apps, grouping, the proposed front window, the
 /// empty-stage flag and the strip's previous order) and recomputes everything else with
 /// `assign` (StageAssignment.swift) after each change. Events change inputs as Apple does
-/// (docs/superpowers/specs/2026-10-23-assignment-model-design.md):
+/// (docs/specs/2026-10-23-assignment-model-design.md):
 ///
 /// - Focus (`windowFocused`, `show`, `deminimize`, `appActivated`, `select`) proposes a
 ///   window: it goes to the front and its group comes on stage (R7).

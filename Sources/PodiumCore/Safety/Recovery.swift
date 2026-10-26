@@ -14,10 +14,15 @@ public enum RecoveryAction: Equatable, Sendable {
 public func recoveryActions(
     entries: [ParkedEntry],
     liveWindows: Set<WindowRef>,
-    visibleScreens: [CGRect]
+    visibleScreens: [CGRect],
+    bundleID: (Int32) -> String? = { _ in nil }
 ) -> [RecoveryAction] {
     entries.map { entry in
         guard liveWindows.contains(entry.window) else { return .forget(entry.window) }
+        // After a reboot the same pid and window number can belong to another app.
+        if let saved = entry.bundleID, let now = bundleID(entry.window.pid), saved != now {
+            return .forget(entry.window)
+        }
         return .restore(entry.window, to: fitted(entry.originalFrame, to: visibleScreens))
     }
 }

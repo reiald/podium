@@ -198,11 +198,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.debugPark(bundleID: bundleID) }
             return
         }
-        if let bundleID = Self.debugArgument("--debug-capture-parked") {
-            debugHold = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.debugCaptureParked(bundleID: bundleID) }
-            return
-        }
         let coordinator = Coordinator(backend: backend, mover: mover, ledger: ledger, capture: capture)
         coordinator.setSide(settings.side)
         coordinator.minimizeBehavior = settings.minimizeBehavior
@@ -506,81 +501,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             podiumLog("Podium: could not write debug park marker: %@", String(describing: error))
         }
-    }
-
-    /// Parks one of the app's windows and live-captures it at 5 fps for 30 s, logging each
-    /// frame's arrival and whether its content changed, then unparks it. Answers whether
-    /// parked windows keep producing live frames (see the research doc, "Still unknown").
-    private func debugCaptureParked(bundleID: String) {
-        guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
-              let w = backend.manageableWindows(of: app.processIdentifier).first,
-              let frame = backend.frame(of: w) else {
-            podiumLog("Podium: debug capture: no manageable window of %@", bundleID)
-            return
-        }
-        let capture = self.capture
-        Task { @MainActor in
-            do {
-                _ = try await capture.snapshot(w, pointSize: frame.size)
-                podiumLog("Podium: debug capture: on-stage snapshot of %u ok", w.windowID)
-            } catch {
-                podiumLog("Podium: debug capture: on-stage snapshot of %u failed: %@", w.windowID, String(describing: error))
-            }
-            guard let screen = Screens.containing(frame),
-                  mover.park(w, display: screen.frame, displayID: screen.id) else {
-                podiumLog("Podium: debug capture: could not park %u", w.windowID)
-                return
-            }
-            podiumLog("Podium: debug capture: parked %u; live at 5 fps for 30 s", w.windowID)
-
-            let stats = DebugFrameStats()
-            let handle: LiveHandle
-            do {
-                handle = try await capture.startLive(w, maxPixelSize: Capture.defaultMaxPixelSize, fps: 5) { image in
-                    MainActor.assumeIsolated { stats.record(image) }
-                }
-            } catch {
-                podiumLog("Podium: debug capture: startLive failed: %@", String(describing: error))
-                _ = mover.unpark(w)
-                return
-            }
-            try? await Task.sleep(nanoseconds: 30_000_000_000)
-            await capture.stopLive(handle)
-            let unparked = mover.unpark(w)
-            podiumLog("Podium: debug capture: done; frames=%d distinct=%d changes=%d; unpark %@",
-                  stats.frames, stats.distinct.count, stats.changes, unparked ? "ok" : "failed")
-        }
-    }
-}
-
-/// Frame log for `--debug-capture-parked`.
-@MainActor
-private final class DebugFrameStats {
-    private(set) var frames = 0
-    private(set) var changes = 0
-    private(set) var distinct: Set<Int> = []
-    private var lastHash: Int?
-    private var lastTime: CFAbsoluteTime?
-
-    func record(_ image: CGImage) {
-        let now = CFAbsoluteTimeGetCurrent()
-        let hash = Self.contentHash(image)
-        let changed = lastHash.map { $0 != hash } ?? false
-        frames += 1
-        if changed { changes += 1 }
-        distinct.insert(hash)
-        podiumLog("Podium: debug capture: frame %d t=%.3f dt=%.3f %dx%d content=%@",
-              frames, now, lastTime.map { now - $0 } ?? 0, image.width, image.height,
-              changed ? "changed" : (lastHash == nil ? "first" : "same"))
-        lastHash = hash
-        lastTime = now
-    }
-
-    /// Hashes every pixel byte (Data's own hash only looks at a prefix).
-    private static func contentHash(_ image: CGImage) -> Int {
-        guard let data = image.dataProvider?.data as Data? else { return 0 }
-        var hasher = Hasher()
-        data.withUnsafeBytes { hasher.combine(bytes: $0) }
-        return hasher.finalize()
     }
 }

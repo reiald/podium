@@ -22,6 +22,17 @@ private let screen = CGRect(x: 0, y: 0, width: 1000, height: 800)
     #expect(actions == [.forget(a.window), .restore(b.window, to: b.originalFrame)])
 }
 
+@Test func recoveryForgetsAWindowWhoseNumberNowBelongsToAnotherApp() {
+    let frame = CGRect(x: 100, y: 100, width: 300, height: 200)
+    let e = ParkedEntry(window: w(1, 1), bundleID: "com.example.Old", originalFrame: frame, displayID: 1)
+    let other = recoveryActions(entries: [e], liveWindows: [e.window], visibleScreens: [screen], bundleID: { _ in "com.example.New" })
+    #expect(other == [.forget(e.window)])
+    let same = recoveryActions(entries: [e], liveWindows: [e.window], visibleScreens: [screen], bundleID: { _ in "com.example.Old" })
+    #expect(same == [.restore(e.window, to: frame)])
+    let unknown = recoveryActions(entries: [e], liveWindows: [e.window], visibleScreens: [screen])
+    #expect(unknown == [.restore(e.window, to: frame)])
+}
+
 @Test func recoveryClampsFramesOntoVisibleScreen() {
     let gone = entry(1, CGRect(x: 3000, y: 100, width: 300, height: 200))
     let actions = recoveryActions(entries: [gone], liveWindows: [gone.window], visibleScreens: [screen])

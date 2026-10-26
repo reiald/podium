@@ -47,6 +47,11 @@ final class AXWindowBackend: WindowBackend {
         return live
     }
 
+    /// Drops a closed window's cached element.
+    func forget(_ w: WindowRef) {
+        elements[w] = nil
+    }
+
     func visibleScreens() -> [CGRect] {
         Screens.all.map(\.visibleFrame)
     }

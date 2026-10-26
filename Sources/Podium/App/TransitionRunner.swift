@@ -58,6 +58,14 @@ final class TransitionRunner {
         }
     }
 
+    /// How long a leave waits for its window screenshots before using the cached ones.
+    private static let leaveCaptureTimeout: TimeInterval = 0.4
+
+    @MainActor private final class ImageBox {
+        private(set) var images: [WindowRef: CGImage] = [:]
+        func set(_ w: WindowRef, _ image: CGImage) { images[w] = image }
+    }
+
     /// Strip cards slide this far beyond the band when hidden, so their shadows go too.
     private static let hiddenShadowMargin: CGFloat = 20
     private static let transitionZ: CGFloat = 1000
@@ -440,15 +448,20 @@ final class TransitionRunner {
             } else {
                 // Nothing refreshes the cache between switches, so capture each leaving window now,
                 // all at once. This is the only capture, so the sharing indicator stays off otherwise.
-                await withTaskGroup(of: (WindowRef, CGImage?).self) { group in
-                    for w in leaving {
-                        let size = sizes[w]
-                        group.addTask {
-                            if let size, let image = try? await capture.snapshot(w, pointSize: size) { return (w, image) }
-                            return (w, await capture.cachedSnapshot(w))
+                // Bounded: a stalled ScreenCaptureKit must not keep the windows on screen.
+                let box = ImageBox()
+                await awaitAtMost(Self.leaveCaptureTimeout) {
+                    await withTaskGroup(of: (WindowRef, CGImage?).self) { group in
+                        for w in leaving {
+                            guard let size = sizes[w] else { continue }
+                            group.addTask { (w, try? await capture.snapshot(w, pointSize: size)) }
                         }
+                        for await (w, image) in group { if let image { await box.set(w, image) } }
                     }
-                    for await (w, image) in group { if let image { images[w] = image } }
+                }
+                images = await box.images
+                for w in leaving where images[w] == nil {
+                    if let image = await capture.cachedSnapshot(w) { images[w] = image }
                 }
             }
             self?.showLeaving(leaving, token: token, images: images)

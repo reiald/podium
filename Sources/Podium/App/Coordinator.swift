@@ -703,6 +703,7 @@ final class Coordinator {
                 systemFocus.windowClosed(w, at: CACurrentMediaTime(), board: board)
                 board.windowClosed(w)
                 runner?.forget(w)
+                backend.forget(w)
                 // A failed list query (empty answer) keeps the ledger entry.
                 if forgetLedger { mover.forget(w) }
                 let capture = self.capture

@@ -39,10 +39,6 @@ actor Capture {
     static let defaultFPS = 5
     static let defaultMaxPixelSize = CGSize(width: 320, height: 320)
 
-    /// When false, `startLive` on a parked window delivers the cached snapshot once and
-    /// stops, for when parked (off-screen) windows don't produce live frames.
-    var liveCapturesParkedWindows = true
-
     private let isParked: @MainActor @Sendable (WindowRef) -> Bool
     private var snapshots: [WindowRef: CGImage] = [:]
     /// Full-resolution snapshots of the few most recently parked windows, so a window
@@ -66,10 +62,6 @@ actor Capture {
 
     init(isParked: @escaping @MainActor @Sendable (WindowRef) -> Bool) {
         self.isParked = isParked
-    }
-
-    func setLiveCapturesParkedWindows(_ value: Bool) {
-        liveCapturesParkedWindows = value
     }
 
     // MARK: - Snapshots
@@ -205,15 +197,6 @@ actor Capture {
         onFrame: @escaping @Sendable (CGImage) -> Void
     ) async throws -> LiveHandle {
         let handle = LiveHandle()
-        if !liveCapturesParkedWindows, await isParked(w) {
-            // Fallback: the strip shows the last snapshot taken while it was on stage.
-            if let image = snapshots[w] {
-                DispatchQueue.main.async { onFrame(image) }
-            } else {
-                logFailure(w, "live (parked fallback)", CaptureError.noImage(w))
-            }
-            return handle
-        }
         do {
             let window = try await shareableWindow(w)
             let filter = SCContentFilter(desktopIndependentWindow: window)
