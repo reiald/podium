@@ -74,7 +74,7 @@ Open **Settings** from the Podium icon in the menu bar. **Strip side**, **Minimi
 Install Podium, turn off Apple's Stage Manager, then choose **Strip on Left** or **Strip on Right** from the Podium menu bar icon.
 
 **Does Podium work with more than one display?**
-The strip and its animations are on the main display only. Windows on other displays are hidden and brought back without the flying thumbnails.
+The strip is on the main display. Podium is built and tested for one display, so windows on other displays may not switch smoothly yet.
 
 **Does Podium need SIP disabled?**
 No. It uses the Accessibility and Screen Recording permissions only.

@@ -281,6 +281,19 @@ private func makeReadOnly(_ dir: URL) throws {
     }
 }
 
+@Test func recoverForgetsAnEntryWhoseWindowNumberNowBelongsToAnotherApp() throws {
+    try withLedger { _, ledger in
+        try ledger.record(ParkedEntry(window: a, bundleID: "com.example.Old", originalFrame: frameA, displayID: 1))
+        let backend = FakeBackend()
+        let parkedAt = CGRect(origin: CGPoint(x: 999, y: 799), size: frameA.size)
+        backend.frames = [a: parkedAt]
+
+        WindowMover(backend: backend, ledger: ledger).recover(visibleScreens: [display])
+        #expect(backend.frames[a] == parkedAt)
+        #expect(ledger.entries().isEmpty)
+    }
+}
+
 @Test func recoverKeepsEntryWhenRestoreFails() throws {
     try withLedger { _, ledger in
         try ledger.record(ParkedEntry(window: a, bundleID: nil, originalFrame: frameA, displayID: 1))
